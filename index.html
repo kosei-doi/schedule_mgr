@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>スケジュール管理アプリ</title>
+    <link rel="stylesheet" href="styles.css">
+    
+    <!-- Firebase SDK (v11.6.0) -->
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-analytics.js";
+        import {
+            getDatabase,
+            ref,
+            set,
+            onValue,
+            push,
+            update,
+            remove,
+            get
+        } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js";
+
+        // Your web app's Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyB1wx4vmRChxKYHP3dW9JFXDlfwIcA7JjY",
+            authDomain: "study-mgr.firebaseapp.com",
+            databaseURL: "https://study-mgr-default-rtdb.firebaseio.com",
+            projectId: "study-mgr",
+            storageBucket: "study-mgr.firebasestorage.app",
+            messagingSenderId: "338741992569",
+            appId: "1:338741992569:web:5b8910da7aae0fe1cac8a8",
+            measurementId: "G-N6NW8T8CZE"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app);
+        const db = getDatabase(app);
+
+        // グローバルに公開
+        window.firebase = { 
+            app, 
+            analytics, 
+            db, 
+            ref, 
+            set, 
+            push, 
+            update, 
+            remove, 
+            onValue, 
+            get
+        };
+        
+        console.log('Firebase v11 initialized successfully');
+        console.log('Firebase初期化完了:', {
+            projectId: firebaseConfig.projectId,
+            databaseURL: firebaseConfig.databaseURL
+        });
+    </script>
+</head>
+<body>
+    <div class="app">
+        <!-- ヘッダー -->
+        <header class="header">
+            <h1 class="title">スケジュール管理</h1>
+            <div class="header-controls">
+                <div class="date-navigation">
+                    <button id="prevDay" class="nav-btn" aria-label="前日/前週">←</button>
+                    <span id="currentDate" class="current-date"></span>
+                    <button id="nextDay" class="nav-btn" aria-label="翌日/翌週">→</button>
+                    <button id="todayBtn" class="today-btn">今日</button>
+                </div>
+                <div class="view-toggle">
+                    <button id="dayViewBtn" class="view-btn active">日次</button>
+                    <button id="weekViewBtn" class="view-btn">週次</button>
+                    <button id="monthViewBtn" class="view-btn">月次</button>
+                </div>
+                <button id="addEventBtn" class="add-btn">+ 予定追加</button>
+                <button id="googleSyncBtn" class="add-btn" style="background-color: #4285f4; margin-left: 10px;">📅 Google連携</button>
+            </div>
+        </header>
+
+        <!-- メインコンテンツ -->
+        <main class="main-content">
+            <!-- 日次ビュー -->
+            <div id="dayView" class="view-container active">
+                <div class="day-header">
+                    <div class="time-column">時間</div>
+                    <div class="events-column">予定</div>
+                </div>
+                <div id="dayEvents" class="day-events">
+                    <!-- 時間軸（0-23時） -->
+                    <div class="time-slots">
+                        <div class="time-slot" data-hour="0">00:00</div>
+                        <div class="time-slot" data-hour="1">01:00</div>
+                        <div class="time-slot" data-hour="2">02:00</div>
+                        <div class="time-slot" data-hour="3">03:00</div>
+                        <div class="time-slot" data-hour="4">04:00</div>
+                        <div class="time-slot" data-hour="5">05:00</div>
+                        <div class="time-slot" data-hour="6">06:00</div>
+                        <div class="time-slot" data-hour="7">07:00</div>
+                        <div class="time-slot" data-hour="8">08:00</div>
+                        <div class="time-slot" data-hour="9">09:00</div>
+                        <div class="time-slot" data-hour="10">10:00</div>
+                        <div class="time-slot" data-hour="11">11:00</div>
+                        <div class="time-slot" data-hour="12">12:00</div>
+                        <div class="time-slot" data-hour="13">13:00</div>
+                        <div class="time-slot" data-hour="14">14:00</div>
+                        <div class="time-slot" data-hour="15">15:00</div>
+                        <div class="time-slot" data-hour="16">16:00</div>
+                        <div class="time-slot" data-hour="17">17:00</div>
+                        <div class="time-slot" data-hour="18">18:00</div>
+                        <div class="time-slot" data-hour="19">19:00</div>
+                        <div class="time-slot" data-hour="20">20:00</div>
+                        <div class="time-slot" data-hour="21">21:00</div>
+                        <div class="time-slot" data-hour="22">22:00</div>
+                        <div class="time-slot" data-hour="23">23:00</div>
+                    </div>
+                    <div id="dayEventContainer" class="event-container">
+                        <!-- イベントがここに動的に追加される -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 週次ビュー -->
+            <div id="weekView" class="view-container">
+                <div class="week-header">
+                    <div class="time-column">時間</div>
+                    <div class="week-days">
+                        <div class="day-header-cell" data-day="0">
+                            <div class="day-date"></div>
+                        </div>
+                        <div class="day-header-cell" data-day="1">
+                            <div class="day-date"></div>
+                        </div>
+                        <div class="day-header-cell" data-day="2">
+                            <div class="day-date"></div>
+                        </div>
+                        <div class="day-header-cell" data-day="3">
+                            <div class="day-date"></div>
+                        </div>
+                        <div class="day-header-cell" data-day="4">
+                            <div class="day-date"></div>
+                        </div>
+                        <div class="day-header-cell" data-day="5">
+                            <div class="day-date"></div>
+                        </div>
+                        <div class="day-header-cell" data-day="6">
+                            <div class="day-date"></div>
+                        </div>
+                    </div>
+                </div>
+                <div id="weekEvents" class="week-events">
+                    <!-- 時間軸（0-23時） -->
+                    <div class="time-slots">
+                        <div class="time-slot" data-hour="0">00:00</div>
+                        <div class="time-slot" data-hour="1">01:00</div>
+                        <div class="time-slot" data-hour="2">02:00</div>
+                        <div class="time-slot" data-hour="3">03:00</div>
+                        <div class="time-slot" data-hour="4">04:00</div>
+                        <div class="time-slot" data-hour="5">05:00</div>
+                        <div class="time-slot" data-hour="6">06:00</div>
+                        <div class="time-slot" data-hour="7">07:00</div>
+                        <div class="time-slot" data-hour="8">08:00</div>
+                        <div class="time-slot" data-hour="9">09:00</div>
+                        <div class="time-slot" data-hour="10">10:00</div>
+                        <div class="time-slot" data-hour="11">11:00</div>
+                        <div class="time-slot" data-hour="12">12:00</div>
+                        <div class="time-slot" data-hour="13">13:00</div>
+                        <div class="time-slot" data-hour="14">14:00</div>
+                        <div class="time-slot" data-hour="15">15:00</div>
+                        <div class="time-slot" data-hour="16">16:00</div>
+                        <div class="time-slot" data-hour="17">17:00</div>
+                        <div class="time-slot" data-hour="18">18:00</div>
+                        <div class="time-slot" data-hour="19">19:00</div>
+                        <div class="time-slot" data-hour="20">20:00</div>
+                        <div class="time-slot" data-hour="21">21:00</div>
+                        <div class="time-slot" data-hour="22">22:00</div>
+                        <div class="time-slot" data-hour="23">23:00</div>
+                    </div>
+                    <div class="week-event-container">
+                        <div class="week-day" data-day="0">
+                            <div class="day-events-container"></div>
+                        </div>
+                        <div class="week-day" data-day="1">
+                            <div class="day-events-container"></div>
+                        </div>
+                        <div class="week-day" data-day="2">
+                            <div class="day-events-container"></div>
+                        </div>
+                        <div class="week-day" data-day="3">
+                            <div class="day-events-container"></div>
+                        </div>
+                        <div class="week-day" data-day="4">
+                            <div class="day-events-container"></div>
+                        </div>
+                        <div class="week-day" data-day="5">
+                            <div class="day-events-container"></div>
+                        </div>
+                        <div class="week-day" data-day="6">
+                            <div class="day-events-container"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 月次ビュー -->
+            <div id="monthView" class="view-container">
+                <div class="month-calendar">
+                    <div class="month-weekdays">
+                        <div class="weekday">日</div>
+                        <div class="weekday">月</div>
+                        <div class="weekday">火</div>
+                        <div class="weekday">水</div>
+                        <div class="weekday">木</div>
+                        <div class="weekday">金</div>
+                        <div class="weekday">土</div>
+                    </div>
+                    <div id="monthGrid" class="month-grid">
+                        <!-- 月次カレンダーの日付がここに動的に生成される -->
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- イベント追加/編集フォーム（モーダル） -->
+        <div id="eventModal" class="modal" role="dialog" aria-hidden="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modalTitle">予定を追加</h2>
+                    <button id="closeModal" class="close-btn" aria-label="閉じる">&times;</button>
+                </div>
+                <form id="eventForm" class="event-form">
+                    <div class="form-group">
+                        <label for="eventTitle">タイトル *</label>
+                        <input type="text" id="eventTitle" name="title" required maxlength="100" aria-required="true">
+                    </div>
+                    <div class="form-group">
+                        <label for="eventDescription">説明</label>
+                        <textarea id="eventDescription" name="description" rows="3" maxlength="500"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="eventStartTime">開始時刻 *</label>
+                            <input type="datetime-local" id="eventStartTime" name="startTime" required aria-required="true">
+                        </div>
+                        <div class="form-group">
+                            <label for="eventEndTime">終了時刻 *</label>
+                            <input type="datetime-local" id="eventEndTime" name="endTime" required aria-required="true">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="eventColor">色</label>
+                        <div class="color-picker" role="radiogroup" aria-label="イベントの色を選択">
+                            <input type="radio" id="color-blue" name="color" value="#3b82f6" checked>
+                            <label for="color-blue" class="color-option" style="background-color: #3b82f6;" aria-label="青"></label>
+                            <input type="radio" id="color-green" name="color" value="#10b981">
+                            <label for="color-green" class="color-option" style="background-color: #10b981;" aria-label="緑"></label>
+                            <input type="radio" id="color-yellow" name="color" value="#f59e0b">
+                            <label for="color-yellow" class="color-option" style="background-color: #f59e0b;" aria-label="黄"></label>
+                            <input type="radio" id="color-red" name="color" value="#ef4444">
+                            <label for="color-red" class="color-option" style="background-color: #ef4444;" aria-label="赤"></label>
+                            <input type="radio" id="color-purple" name="color" value="#8b5cf6">
+                            <label for="color-purple" class="color-option" style="background-color: #8b5cf6;" aria-label="紫"></label>
+                            <input type="radio" id="color-pink" name="color" value="#ec4899">
+                            <label for="color-pink" class="color-option" style="background-color: #ec4899;" aria-label="ピンク"></label>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" id="cancelBtn" class="btn btn-secondary">キャンセル</button>
+                        <button type="submit" class="btn btn-primary">保存</button>
+                        <button type="button" id="deleteBtn" class="btn btn-danger" style="display: none;">削除</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Google Calendar API -->
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://accounts.google.com/gsi/client"></script>
+    
+    <script src="app.js"></script>
+</body>
+</html>
+
