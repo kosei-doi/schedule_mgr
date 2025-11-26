@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>スケジュール管理アプリ</title>
     <link rel="stylesheet" href="styles.css">
-    
-    <!-- Firebase SDK (v11.6.0) -->
+</head>
+<body>
+    <!-- Firebase SDK (v11) -->
     <script type="module">
-        // Import the functions you need from the SDKs you need
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-analytics.js";
         import {
@@ -22,45 +22,25 @@
             get
         } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js";
 
-        // Your web app's Firebase configuration
         const firebaseConfig = {
-            apiKey: "AIzaSyB1wx4vmRChxKYHP3dW9JFXDlfwIcA7JjY",
-            authDomain: "study-mgr.firebaseapp.com",
-            databaseURL: "https://study-mgr-default-rtdb.firebaseio.com",
-            projectId: "study-mgr",
-            storageBucket: "study-mgr.firebasestorage.app",
-            messagingSenderId: "338741992569",
-            appId: "1:338741992569:web:5b8910da7aae0fe1cac8a8",
-            measurementId: "G-N6NW8T8CZE"
+            apiKey: "AIzaSyDCKnSSbdU-17Wzpjsi6gLPnXTCYZDbKPQ",
+            authDomain: "schedule-mgr-b16fb.firebaseapp.com",
+            databaseURL: "https://schedule-mgr-b16fb-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "schedule-mgr-b16fb",
+            storageBucket: "schedule-mgr-b16fb.firebasestorage.app",
+            messagingSenderId: "811941523003",
+            appId: "1:811941523003:web:a25889182329fe03df761e",
+            measurementId: "G-V1P050F1CJ"
         };
 
-        // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const analytics = getAnalytics(app);
         const db = getDatabase(app);
 
-        // グローバルに公開
-        window.firebase = { 
-            app, 
-            analytics, 
-            db, 
-            ref, 
-            set, 
-            push, 
-            update, 
-            remove, 
-            onValue, 
-            get
-        };
-        
+        window.firebase = { app, analytics, db, ref, set, onValue, push, update, remove, get };
         console.log('Firebase v11 initialized successfully');
-        console.log('Firebase初期化完了:', {
-            projectId: firebaseConfig.projectId,
-            databaseURL: firebaseConfig.databaseURL
-        });
     </script>
-</head>
-<body>
+
     <div class="app">
         <!-- ヘッダー -->
         <header class="header">
@@ -77,10 +57,15 @@
                     <button id="weekViewBtn" class="view-btn">週次</button>
                     <button id="monthViewBtn" class="view-btn">月次</button>
                 </div>
-                <button id="addEventBtn" class="add-btn">+ 予定追加</button>
-                <button id="googleSyncBtn" class="add-btn" style="background-color: #4285f4; margin-left: 10px;">📅 Google連携</button>
+                <div class="header-actions">
+                    <button id="addEventBtn" class="add-btn">+ 予定追加</button>
+                    <input id="importFile" type="file" accept=".json,.ics,text/calendar" style="display:none" />
+                    <button id="importBtn" class="today-btn">インポート</button>
+                    <button id="exportBtn" class="today-btn">エクスポート</button>
+                </div>
             </div>
         </header>
+        <div id="notificationArea" class="notification" role="status" aria-live="polite"></div>
 
         <!-- メインコンテンツ -->
         <main class="main-content">
@@ -90,13 +75,15 @@
                     <div class="time-column">時間</div>
                     <div class="events-column">予定</div>
                 </div>
+                <div class="day-all-day-row">
+                    <div class="all-day-label" data-view="day">終日</div>
+                    <div id="dayAllDayContainer" class="all-day-events">
+                        <!-- 終日イベントがここに生成される -->
+                    </div>
+                </div>
                 <div id="dayEvents" class="day-events">
                     <!-- 時間軸（0-23時） -->
                     <div class="time-slots">
-                        <div class="time-slot" data-hour="0">00:00</div>
-                        <div class="time-slot" data-hour="1">01:00</div>
-                        <div class="time-slot" data-hour="2">02:00</div>
-                        <div class="time-slot" data-hour="3">03:00</div>
                         <div class="time-slot" data-hour="4">04:00</div>
                         <div class="time-slot" data-hour="5">05:00</div>
                         <div class="time-slot" data-hour="6">06:00</div>
@@ -152,13 +139,21 @@
                         </div>
                     </div>
                 </div>
+                <div class="week-all-day-row">
+                    <div class="time-column" data-view="week">終日</div>
+                    <div class="week-all-day-columns">
+                        <div class="all-day-column" data-day="0"></div>
+                        <div class="all-day-column" data-day="1"></div>
+                        <div class="all-day-column" data-day="2"></div>
+                        <div class="all-day-column" data-day="3"></div>
+                        <div class="all-day-column" data-day="4"></div>
+                        <div class="all-day-column" data-day="5"></div>
+                        <div class="all-day-column" data-day="6"></div>
+                    </div>
+                </div>
                 <div id="weekEvents" class="week-events">
                     <!-- 時間軸（0-23時） -->
                     <div class="time-slots">
-                        <div class="time-slot" data-hour="0">00:00</div>
-                        <div class="time-slot" data-hour="1">01:00</div>
-                        <div class="time-slot" data-hour="2">02:00</div>
-                        <div class="time-slot" data-hour="3">03:00</div>
                         <div class="time-slot" data-hour="4">04:00</div>
                         <div class="time-slot" data-hour="5">05:00</div>
                         <div class="time-slot" data-hour="6">06:00</div>
@@ -233,41 +228,89 @@
                     <button id="closeModal" class="close-btn" aria-label="閉じる">&times;</button>
                 </div>
                 <form id="eventForm" class="event-form">
-                    <div class="form-group">
-                        <label for="eventTitle">タイトル *</label>
-                        <input type="text" id="eventTitle" name="title" required maxlength="100" aria-required="true">
-                    </div>
-                    <div class="form-group">
-                        <label for="eventDescription">説明</label>
-                        <textarea id="eventDescription" name="description" rows="3" maxlength="500"></textarea>
-                    </div>
-                    <div class="form-row">
+                    <div class="form-section main-section">
                         <div class="form-group">
-                            <label for="eventStartTime">開始時刻 *</label>
-                            <input type="datetime-local" id="eventStartTime" name="startTime" required aria-required="true">
+                            <label for="eventTitle">タイトル *</label>
+                            <input type="text" id="eventTitle" name="title" required maxlength="100" aria-required="true">
                         </div>
-                        <div class="form-group">
-                            <label for="eventEndTime">終了時刻 *</label>
-                            <input type="datetime-local" id="eventEndTime" name="endTime" required aria-required="true">
+                        <div class="form-row compact-row">
+                            <div class="form-group compact">
+                                <label for="eventStartTime">開始 *</label>
+                                <input type="datetime-local" id="eventStartTime" name="startTime" required aria-required="true">
+                            </div>
+                            <div class="form-group compact">
+                                <label for="eventEndTime">終了 *</label>
+                                <input type="datetime-local" id="eventEndTime" name="endTime" required aria-required="true">
+                            </div>
+                        </div>
+                        <div class="form-row all-day-date-row hidden" id="allDayDateRow">
+                            <div class="form-group compact">
+                                <label for="eventAllDayStart">開始日 *</label>
+                                <input type="date" id="eventAllDayStart" name="allDayStart">
+                            </div>
+                            <div class="form-group compact">
+                                <label for="eventAllDayEnd">終了日 *</label>
+                                <input type="date" id="eventAllDayEnd" name="allDayEnd">
+                            </div>
+                        </div>
+                        <div class="form-group compact">
+                            <label for="eventDescription">説明</label>
+                            <textarea id="eventDescription" name="description" rows="1" maxlength="500" placeholder="オプション"></textarea>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label for="eventColor">色</label>
-                        <div class="color-picker" role="radiogroup" aria-label="イベントの色を選択">
-                            <input type="radio" id="color-blue" name="color" value="#3b82f6" checked>
-                            <label for="color-blue" class="color-option" style="background-color: #3b82f6;" aria-label="青"></label>
-                            <input type="radio" id="color-green" name="color" value="#10b981">
-                            <label for="color-green" class="color-option" style="background-color: #10b981;" aria-label="緑"></label>
-                            <input type="radio" id="color-yellow" name="color" value="#f59e0b">
-                            <label for="color-yellow" class="color-option" style="background-color: #f59e0b;" aria-label="黄"></label>
-                            <input type="radio" id="color-red" name="color" value="#ef4444">
-                            <label for="color-red" class="color-option" style="background-color: #ef4444;" aria-label="赤"></label>
-                            <input type="radio" id="color-purple" name="color" value="#8b5cf6">
-                            <label for="color-purple" class="color-option" style="background-color: #8b5cf6;" aria-label="紫"></label>
-                            <input type="radio" id="color-pink" name="color" value="#ec4899">
-                            <label for="color-pink" class="color-option" style="background-color: #ec4899;" aria-label="ピンク"></label>
+                    
+                    <div class="form-section options-section">
+                        <div class="form-group checkbox-group compact">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="eventAllDay" name="allDay">
+                                終日イベント
+                            </label>
+                        </div>
+                        <div class="form-group compact">
+                            <label for="eventColor">色</label>
+                            <div class="color-picker" role="radiogroup" aria-label="イベントの色を選択">
+                                <input type="radio" id="color-blue" name="color" value="#3b82f6" checked>
+                                <label for="color-blue" class="color-option" style="background-color: #3b82f6;" aria-label="青"></label>
+                                <input type="radio" id="color-green" name="color" value="#10b981">
+                                <label for="color-green" class="color-option" style="background-color: #10b981;" aria-label="緑"></label>
+                                <input type="radio" id="color-yellow" name="color" value="#f59e0b">
+                                <label for="color-yellow" class="color-option" style="background-color: #f59e0b;" aria-label="黄"></label>
+                                <input type="radio" id="color-red" name="color" value="#ef4444">
+                                <label for="color-red" class="color-option" style="background-color: #ef4444;" aria-label="赤"></label>
+                                <input type="radio" id="color-purple" name="color" value="#8b5cf6">
+                                <label for="color-purple" class="color-option" style="background-color: #8b5cf6;" aria-label="紫"></label>
+                                <input type="radio" id="color-pink" name="color" value="#ec4899">
+                                <label for="color-pink" class="color-option" style="background-color: #ec4899;" aria-label="ピンク"></label>
+                            </div>
+                        </div>
+                        <div class="form-row compact-row">
+                            <div class="form-group compact">
+                                <label for="eventReminder">通知</label>
+                                <select id="eventReminder" name="reminderMinutes">
+                                    <option value="">なし</option>
+                                    <option value="0">開始時</option>
+                                    <option value="5">5分前</option>
+                                    <option value="10">10分前</option>
+                                    <option value="30">30分前</option>
+                                    <option value="60">60分前</option>
+                                </select>
+                            </div>
+                            <div class="form-group compact">
+                                <label for="eventRecurrence">繰り返し</label>
+                                <select id="eventRecurrence" name="recurrence">
+                                    <option value="none">なし</option>
+                                    <option value="daily">毎日</option>
+                                    <option value="weekly">毎週</option>
+                                    <option value="monthly">毎月</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group compact hidden" id="recurrenceEndGroup">
+                            <label for="eventRecurrenceEnd">繰り返し終了日</label>
+                            <input type="date" id="eventRecurrenceEnd" name="recurrenceEnd">
                         </div>
                     </div>
+                    
                     <div class="form-actions">
                         <button type="button" id="cancelBtn" class="btn btn-secondary">キャンセル</button>
                         <button type="submit" class="btn btn-primary">保存</button>
@@ -276,12 +319,30 @@
                 </form>
             </div>
         </div>
+
+        <!-- 確認モーダル -->
+        <div id="confirmModal" class="modal" role="dialog" aria-hidden="true">
+            <div class="modal-content confirm-modal-content">
+                <div class="modal-header">
+                    <h2 id="confirmTitle">確認</h2>
+                </div>
+                <div class="confirm-body">
+                    <p id="confirmMessage"></p>
+                </div>
+                <div class="form-actions">
+                    <button type="button" id="confirmCancelBtn" class="btn btn-secondary">キャンセル</button>
+                    <button type="button" id="confirmOkBtn" class="btn btn-primary">OK</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ローディングオーバーレイ -->
+        <div id="loadingOverlay" class="loading-overlay hidden">
+            <div class="loading-spinner"></div>
+            <p class="loading-text">処理中...</p>
+        </div>
     </div>
 
-    <!-- Google Calendar API -->
-    <script src="https://apis.google.com/js/api.js"></script>
-    <script src="https://accounts.google.com/gsi/client"></script>
-    
     <script src="app.js"></script>
 </body>
 </html>
