@@ -2,6 +2,7 @@ let unsubscribeEvents = null;
 
 // グローバル変数
 let events = [];
+let deletedEventIds = new Set(); // 削除されたイベントIDを追跡（再追加を防ぐため）
 let currentDate = new Date();
 let currentView = 'day'; // 'day', 'week', or 'month'
 let editingEventId = null;
@@ -191,6 +192,29 @@ function checkFirebase() {
   }
   isFirebaseEnabled = false;
   return false;
+}
+
+// 削除されたイベントIDを読み込む関数
+async function loadDeletedEventIds() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    return;
+  }
+  
+  try {
+    const deletedRef = window.firebase.ref(window.firebase.db, "deletedEvents");
+    const snapshot = await window.firebase.get(deletedRef);
+    const data = snapshot.val();
+    
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      deletedEventIds = new Set(Object.keys(data));
+      console.log('削除されたイベントIDを読み込み:', deletedEventIds.size, '件');
+    } else {
+      deletedEventIds = new Set();
+    }
+  } catch (error) {
+    console.error('削除されたイベントIDの読み込みに失敗しました:', error);
+    deletedEventIds = new Set();
+  }
 }
 
 // イベントを読み込む関数（combiと同じロジック）
@@ -587,8 +611,41 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
       continue;
     }
 
+    // 0. 削除されたイベントかチェック（再追加を防ぐ）
+    const scheduleMgrId = googleEvent.scheduleMgrId;
+    if (scheduleMgrId && deletedEventIds.has(scheduleMgrId)) {
+      console.warn('削除されたイベントをスキップ（再追加を防止）:', scheduleMgrId, normalized.title);
+      skipped += 1;
+      continue;
+    }
+    
+    // googleEventIdでも削除チェック（Firebaseから削除情報を取得して確認）
+    if (normalized.googleEventId && isFirebaseEnabled && window.firebase?.db) {
+      try {
+        // deletedEventsコレクションからgoogleEventIdで検索
+        const deletedRef = window.firebase.ref(window.firebase.db, 'deletedEvents');
+        const deletedSnapshot = await window.firebase.get(deletedRef);
+        const deletedData = deletedSnapshot.val();
+        
+        if (deletedData && typeof deletedData === 'object') {
+          const isDeletedByGoogleId = Object.values(deletedData).some(deletedInfo => {
+            return deletedInfo?.googleEventId === normalized.googleEventId;
+          });
+          
+          if (isDeletedByGoogleId) {
+            console.warn('削除されたイベントをスキップ（googleEventIdで検出）:', normalized.googleEventId, normalized.title);
+            skipped += 1;
+            continue;
+          }
+        }
+      } catch (error) {
+        console.warn('削除イベントのチェック中にエラー:', error);
+        // エラーが発生しても処理を続行
+      }
+    }
+
     // 1. scheduleMgrIdで既存イベントを検索
-    if (googleEvent.scheduleMgrId && eventsById.has(googleEvent.scheduleMgrId)) {
+    if (scheduleMgrId && eventsById.has(scheduleMgrId)) {
       const existing = eventsById.get(googleEvent.scheduleMgrId);
       if (existing.isTimetable === true) {
         skipped += 1;
@@ -952,11 +1009,28 @@ async function deleteEvent(id) {
   const releaseLock = await acquireLock('delete');
   
   try {
+    // 削除するイベントの情報を取得（googleEventIdを記録するため）
+    const eventToDelete = Array.isArray(events) ? events.find(e => e.id === id) : null;
+    const googleEventId = eventToDelete?.googleEventId || null;
+    const scheduleMgrId = id;
+    
     // リトライロジック付きでFirebaseから削除
     await retryOperation(async () => {
       const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
       await window.firebase.remove(eventRef);
       console.log('Firebaseからイベントを削除:', id);
+    });
+    
+    // 削除されたイベントIDを記録（再追加を防ぐため）
+    await retryOperation(async () => {
+      const deletedRef = window.firebase.ref(window.firebase.db, `deletedEvents/${id}`);
+      await window.firebase.set(deletedRef, {
+        deletedAt: new Date().toISOString(),
+        googleEventId: googleEventId,
+        scheduleMgrId: scheduleMgrId
+      });
+      deletedEventIds.add(id);
+      console.log('削除されたイベントIDを記録:', id);
     });
     
     // ローカル配列からも削除（Firebaseのリアルタイムリスナーが更新するが、念のため即座に更新）
@@ -2630,7 +2704,7 @@ function validateEvent(event) {
 
 
 // 初期化（combiと同じロジック）
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
   console.log('アプリケーションを初期化中...');
   
   // Firebase接続チェック
@@ -2638,6 +2712,9 @@ document.addEventListener('DOMContentLoaded', function() {
     showMessage('Firebaseに接続できません。設定を確認してから再読み込みしてください。', 'error', 6000);
     return;
   }
+  
+  // 削除されたイベントIDを読み込み（再追加を防ぐため）
+  await loadDeletedEventIds();
   
   // イベントを読み込み
   loadEvents();
