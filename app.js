@@ -13,6 +13,46 @@ let googleSyncTimeoutId = null;
 let googleSyncInFlight = false;
 const GOOGLE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const INITIAL_GOOGLE_SYNC_DELAY_MS = 30 * 1000; // 30 seconds
+
+// 操作ロック機構（信頼性向上のため）
+const operationLocks = {
+  add: false,
+  update: false,
+  delete: false,
+  sync: false
+};
+
+// 操作ロックを取得（競合状態を防ぐ）
+async function acquireLock(operation, timeout = 5000) {
+  const startTime = Date.now();
+  while (operationLocks[operation]) {
+    if (Date.now() - startTime > timeout) {
+      throw new Error(`操作ロックの取得に失敗しました: ${operation} (タイムアウト)`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  operationLocks[operation] = true;
+  return () => {
+    operationLocks[operation] = false;
+  };
+}
+
+// リトライロジック（ネットワークエラー時の再試行）
+async function retryOperation(operation, maxRetries = 3, delay = 1000) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries) {
+        console.warn(`操作が失敗しました (試行 ${attempt}/${maxRetries}):`, error);
+        await new Promise(resolve => setTimeout(resolve, delay * attempt));
+      }
+    }
+  }
+  throw lastError;
+}
 const VISIBLE_START_HOUR = 4;
 const VISIBLE_END_HOUR = 23;
 const HOUR_HEIGHT_PX = 25;
@@ -248,24 +288,28 @@ function buildSyncEventPayload(event) {
 }
 
 async function syncEventsToGoogleCalendar({ silent = false } = {}) {
-  if (!GOOGLE_APPS_SCRIPT_ENDPOINT) {
-    const message = 'Google Apps Script の Web アプリ URL が設定されていません。';
-    if (!silent) showMessage(message, 'error', 6000);
-    throw new Error(message);
-  }
-
-  const rangeSet = getAllowedDateRanges();
-  logAllowedRanges('Google Sync');
-
-  if (!isFirebaseEnabled) {
-    const message = 'Firebaseとの同期完了後に再度お試しください。';
-    if (!silent) showMessage(message, 'error', 6000);
-    throw new Error(message);
-  }
+  // 操作ロックを取得
+  const releaseLock = await acquireLock('sync');
   
-  if (!silent) {
-    showLoading('Googleカレンダーと同期中...');
-  }
+  try {
+    if (!GOOGLE_APPS_SCRIPT_ENDPOINT) {
+      const message = 'Google Apps Script の Web アプリ URL が設定されていません。';
+      if (!silent) showMessage(message, 'error', 6000);
+      throw new Error(message);
+    }
+
+    const rangeSet = getAllowedDateRanges();
+    logAllowedRanges('Google Sync');
+
+    if (!isFirebaseEnabled) {
+      const message = 'Firebaseとの同期完了後に再度お試しください。';
+      if (!silent) showMessage(message, 'error', 6000);
+      throw new Error(message);
+    }
+    
+    if (!silent) {
+      showLoading('Googleカレンダーと同期中...');
+    }
 
   if (!Array.isArray(events) || events.length === 0) {
     if (!silent) {
@@ -329,62 +373,73 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     events: deduplicatedEvents.map(buildSyncEventPayload),
   };
 
-  let response;
-  try {
-    response = await fetch(GOOGLE_APPS_SCRIPT_ENDPOINT, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-      mode: 'cors',
-    });
+    let response;
+    try {
+      // リトライロジック付きでGoogle Apps Scriptに送信
+      response = await retryOperation(async () => {
+        return await fetch(GOOGLE_APPS_SCRIPT_ENDPOINT, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          mode: 'cors',
+        });
+      });
+    } catch (error) {
+      if (!silent) {
+        hideLoading();
+        showMessage('Googleカレンダー同期に失敗しました。ネットワークを確認してください。', 'error', 6000);
+      }
+      throw error;
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      const message = `Google Apps Script 呼び出しに失敗しました (${response.status}) ${errorText || ''}`.trim();
+      if (!silent) {
+        hideLoading();
+        showMessage(message, 'error', 6000);
+      }
+      throw new Error(message);
+    }
+
+    let result = null;
+    try {
+      result = await response.json();
+    } catch (error) {
+      // レスポンスがJSONでない場合はそのまま成功扱い
+      if (!silent) {
+        hideLoading();
+        showMessage('Googleカレンダーと同期しました。', 'success', 5000);
+      }
+      return { created: 0, updated: 0, skipped: skippedCount || 0 };
+    }
+
+    const created = Number(result?.created) || 0;
+    const updated = Number(result?.updated) || 0;
+    const skippedFromServer = Number(result?.skipped) || 0;
+    const totalSkipped = skippedCount + skippedFromServer; // クライアント側とサーバー側のスキップ数を合計
+    const message =
+      typeof result?.message === 'string' && result.message.trim().length > 0
+        ? result.message.trim()
+        : 'Googleカレンダーと同期しました。';
+
+    if (!silent) {
+      hideLoading();
+      showMessage(`${message} (作成:${created} / 更新:${updated} / スキップ:${totalSkipped})`, 'success', 6000);
+    } else {
+      // Always hide loading, even in silent mode
+      hideLoading();
+      console.log(`Google Sync Result: ${message} | created=${created} updated=${updated} skipped=${totalSkipped} (client:${skippedCount} server:${skippedFromServer})`);
+    }
+
+    return { created, updated, skipped: totalSkipped };
   } catch (error) {
     if (!silent) {
       hideLoading();
-      showMessage('Googleカレンダー同期に失敗しました。ネットワークを確認してください。', 'error', 6000);
     }
     throw error;
+  } finally {
+    releaseLock();
   }
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    const message = `Google Apps Script 呼び出しに失敗しました (${response.status}) ${errorText || ''}`.trim();
-    if (!silent) {
-      hideLoading();
-      showMessage(message, 'error', 6000);
-    }
-    throw new Error(message);
-  }
-
-  let result = null;
-  try {
-    result = await response.json();
-  } catch (error) {
-    // レスポンスがJSONでない場合はそのまま成功扱い
-    if (!silent) {
-      hideLoading();
-      showMessage('Googleカレンダーと同期しました。', 'success', 5000);
-    }
-    return { created: 0, updated: 0, skipped: skippedCount || 0 };
-  }
-
-  const created = Number(result?.created) || 0;
-  const updated = Number(result?.updated) || 0;
-  const skippedFromServer = Number(result?.skipped) || 0;
-  const totalSkipped = skippedCount + skippedFromServer; // クライアント側とサーバー側のスキップ数を合計
-  const message =
-    typeof result?.message === 'string' && result.message.trim().length > 0
-      ? result.message.trim()
-      : 'Googleカレンダーと同期しました。';
-
-  if (!silent) {
-    hideLoading();
-    showMessage(`${message} (作成:${created} / 更新:${updated} / スキップ:${totalSkipped})`, 'success', 6000);
-  } else {
-    // Always hide loading, even in silent mode
-    hideLoading();
-    console.log(`Google Sync Result: ${message} | created=${created} updated=${updated} skipped=${totalSkipped} (client:${skippedCount} server:${skippedFromServer})`);
-  }
-  
-  return { created, updated, skipped: totalSkipped };
 }
 
 async function fetchGoogleCalendarEvents({ silent = false } = {}) {
@@ -404,7 +459,10 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   let response;
   try {
     const url = `${GOOGLE_APPS_SCRIPT_ENDPOINT}?action=events`;
-    response = await fetch(url, { method: 'GET', mode: 'cors' });
+    // リトライロジック付きでGoogle Apps Scriptから取得
+    response = await retryOperation(async () => {
+      return await fetch(url, { method: 'GET', mode: 'cors' });
+    });
   } catch (error) {
     if (!silent) {
       hideLoading();
@@ -436,7 +494,7 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   }
 
   const googleEvents = Array.isArray(result?.events) ? result.events : [];
-  const { created, updated } = mergeGoogleEvents(googleEvents, rangeSet);
+  const { created, updated } = await mergeGoogleEvents(googleEvents, rangeSet);
   if (!silent) {
     hideLoading();
     showMessage(
@@ -497,7 +555,7 @@ async function clearGoogleCalendarEvents({ silent = false } = {}) {
   return { deleted: Number(result.deleted) || 0 };
 }
 
-function mergeGoogleEvents(googleEvents = [], ranges) {
+async function mergeGoogleEvents(googleEvents = [], ranges) {
   let created = 0;
   let updated = 0;
   let skipped = 0;
@@ -517,15 +575,16 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
 
   const rangeSet = ranges || getAllowedDateRanges();
 
-  googleEvents.forEach(googleEvent => {
+  // 非同期処理を順次実行（競合を防ぐため）
+  for (const googleEvent of googleEvents) {
     const normalized = normalizeGoogleEvent(googleEvent, rangeSet);
     if (normalized.filteredOut) {
       skipped += 1;
-      return;
+      continue;
     }
     if (!normalized.startTime || !normalized.endTime) {
       skipped += 1;
-      return;
+      continue;
     }
 
     // 1. scheduleMgrIdで既存イベントを検索
@@ -533,17 +592,22 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
       const existing = eventsById.get(googleEvent.scheduleMgrId);
       if (existing.isTimetable === true) {
         skipped += 1;
-        return;
+        continue;
       }
       if (!isEventInAllowedRange(existing, rangeSet)) {
         skipped += 1;
-        return;
+        continue;
       }
       if (needsExternalUpdate(existing, normalized)) {
-        updateEvent(googleEvent.scheduleMgrId, normalized);
-        updated += 1;
+        try {
+          await updateEvent(googleEvent.scheduleMgrId, normalized);
+          updated += 1;
+        } catch (error) {
+          console.error('Googleイベントの更新に失敗しました:', error);
+          skipped += 1;
+        }
       }
-      return;
+      continue;
     }
 
     // 2. googleEventIdで既存イベントを検索
@@ -551,21 +615,26 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
       const existing = eventsByGoogleId.get(normalized.googleEventId);
       if (existing.isTimetable === true) {
         skipped += 1;
-        return;
+        continue;
       }
       if (!isEventInAllowedRange(existing, rangeSet)) {
         skipped += 1;
-        return;
+        continue;
       }
       if (needsExternalUpdate(existing, normalized)) {
-        updateEvent(existing.id, {
-          ...normalized,
-          source: existing.source || 'google',
-          isGoogleImported: true,
-        });
-        updated += 1;
+        try {
+          await updateEvent(existing.id, {
+            ...normalized,
+            source: existing.source || 'google',
+            isGoogleImported: true,
+          });
+          updated += 1;
+        } catch (error) {
+          console.error('Googleイベントの更新に失敗しました:', error);
+          skipped += 1;
+        }
       }
-      return;
+      continue;
     }
 
     // 3. 内容ベースの重複チェック（タイトル、開始時刻、終了時刻が同じ）
@@ -579,7 +648,7 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
     if (duplicateByContent) {
       console.warn('Googleイベントの重複を検出（内容ベース）:', normalized.title);
       skipped += 1;
-      return;
+      continue;
     }
     
     // 4. 追加の重複チェック：同じタイトルで開始時刻が非常に近い（±5分以内）イベントも重複とみなす
@@ -615,24 +684,29 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
     if (similarEvents.length > 0) {
       console.warn('Googleイベントの重複を検出（類似イベント）:', normalized.title);
       skipped += 1;
-      return;
+      continue;
     }
 
     // 5. 新規イベントとして追加（addEvent内でも重複チェックが実行される）
-    const newEventId = addEvent({
-      ...normalized,
-      isTimetable: false,
-      source: 'google',
-      isGoogleImported: true,
-    });
-    if (newEventId) {
-      created += 1;
-    } else {
-      // addEvent内で重複が検出された場合
+    try {
+      const newEventId = await addEvent({
+        ...normalized,
+        isTimetable: false,
+        source: 'google',
+        isGoogleImported: true,
+      });
+      if (newEventId) {
+        created += 1;
+      } else {
+        // addEvent内で重複が検出された場合
+        skipped += 1;
+        console.warn('addEventで重複が検出されました:', normalized.title);
+      }
+    } catch (error) {
+      console.error('Googleイベントの追加に失敗しました:', error);
       skipped += 1;
-      console.warn('addEventで重複が検出されました:', normalized.title);
     }
-  });
+  }
 
   return { created, updated, skipped };
 }
@@ -716,125 +790,195 @@ function isDuplicateEvent(newEvent, existingEvents = events, strictMode = false)
   });
 }
 
-// イベントを追加（重複チェック付き）
-function addEvent(event) {
-  const normalizedStart = normalizeEventDateTimeString(event.startTime);
-  const normalizedEnd = normalizeEventDateTimeString(event.endTime);
-  const newEvent = {
-    ...event,
-    startTime: normalizedStart || event.startTime || '',
-    endTime: normalizedEnd || event.endTime || '',
-    allDay: event.allDay === true,
-    source: event.source || 'local',
-    googleEventId: event.googleEventId || null,
-    isGoogleImported: event.isGoogleImported === true,
-    externalUpdatedAt: event.externalUpdatedAt || null,
-    isTimetable: event.isTimetable === true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    lastWriteClientId: clientId
-  };
-
-  // 重複チェック
-  if (isDuplicateEvent(newEvent, events)) {
-    console.warn('重複イベントの追加をスキップしました:', newEvent.title);
-    return null;
+// イベントを追加（重複チェック付き、非同期処理で信頼性向上）
+async function addEvent(event) {
+  // 入力検証
+  if (!event) {
+    throw new Error('イベントデータが指定されていません');
   }
 
-  if (!isFirebaseEnabled || !window.firebase?.db) {
-    const message = 'Firebaseが無効のため、イベントを保存できません。設定を確認してください。';
-    console.error(message);
-    showMessage(message, 'error', 6000);
-    return null;
-  }
-
+  // 操作ロックを取得
+  const releaseLock = await acquireLock('add');
+  
   try {
-  const eventsRef = window.firebase.ref(window.firebase.db, "events");
-  const newEventRef = window.firebase.push(eventsRef);
-  // DBにはidフィールドを書き込まない（キーと競合させない）
-  const { id: _omitId, ...payload } = newEvent;
-  window.firebase.set(newEventRef, payload);
-  console.log('Firebaseにイベントを追加:', newEventRef.key);
-  return newEventRef.key;
+    const normalizedStart = normalizeEventDateTimeString(event.startTime);
+    const normalizedEnd = normalizeEventDateTimeString(event.endTime);
+    const newEvent = {
+      ...event,
+      startTime: normalizedStart || event.startTime || '',
+      endTime: normalizedEnd || event.endTime || '',
+      allDay: event.allDay === true,
+      source: event.source || 'local',
+      googleEventId: event.googleEventId || null,
+      isGoogleImported: event.isGoogleImported === true,
+      externalUpdatedAt: event.externalUpdatedAt || null,
+      isTimetable: event.isTimetable === true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastWriteClientId: clientId
+    };
+
+    // 重複チェック
+    if (isDuplicateEvent(newEvent, events)) {
+      console.warn('重複イベントの追加をスキップしました:', newEvent.title);
+      return null;
+    }
+
+    if (!isFirebaseEnabled || !window.firebase?.db) {
+      const message = 'Firebaseが無効のため、イベントを保存できません。設定を確認してください。';
+      console.error(message);
+      showMessage(message, 'error', 6000);
+      throw new Error(message);
+    }
+
+    // リトライロジック付きでFirebaseに追加
+    const eventId = await retryOperation(async () => {
+      const eventsRef = window.firebase.ref(window.firebase.db, "events");
+      const newEventRef = window.firebase.push(eventsRef);
+      // DBにはidフィールドを書き込まない（キーと競合させない）
+      const { id: _omitId, ...payload } = newEvent;
+      await window.firebase.set(newEventRef, payload);
+      console.log('Firebaseにイベントを追加:', newEventRef.key);
+      return newEventRef.key;
+    });
+
+    return eventId;
   } catch (error) {
     console.error('Firebaseにイベントを追加できませんでした。', error);
     showMessage('イベントを保存できませんでした。ネットワークやFirebase設定を確認してください。', 'error', 6000);
-    return null;
+    throw error;
+  } finally {
+    releaseLock();
   }
 }
 
-// イベントを更新（combiと同じロジック）
-function updateEvent(id, event) {
+// イベントを更新（非同期処理で信頼性向上）
+async function updateEvent(id, event) {
   if (!id) {
     console.error('updateEvent: イベントIDが指定されていません');
-    return;
+    throw new Error('イベントIDが指定されていません');
   }
 
-  const existingEvent = Array.isArray(events) ? events.find(e => e.id === id) : null;
+  if (!event) {
+    console.error('updateEvent: イベントデータが指定されていません');
+    throw new Error('イベントデータが指定されていません');
+  }
+
+  // 操作ロックを取得
+  const releaseLock = await acquireLock('update');
   
-  // 既存イベントが存在しない場合の警告
-  if (!existingEvent) {
-    console.warn(`updateEvent: イベントID ${id} が見つかりません。新規作成として処理します。`);
-  }
-
-  const startSource = event.startTime ?? existingEvent?.startTime ?? '';
-  const endSource = event.endTime ?? existingEvent?.endTime ?? '';
-  const normalizedStart = normalizeEventDateTimeString(startSource);
-  const normalizedEnd = normalizeEventDateTimeString(endSource);
-  
-  const updatedEvent = {
-    ...(existingEvent || {}),
-    ...event,
-    startTime: normalizedStart || startSource,
-    endTime: normalizedEnd || endSource,
-    allDay: event.allDay === true,
-    isTimetable: event.isTimetable === true ? true : (existingEvent?.isTimetable === true),
-    source: event.source || existingEvent?.source || 'local',
-    googleEventId: event.googleEventId || existingEvent?.googleEventId || null,
-    isGoogleImported:
-      event.isGoogleImported === true
-        ? true
-        : (existingEvent?.isGoogleImported === true),
-    externalUpdatedAt: event.externalUpdatedAt || existingEvent?.externalUpdatedAt || null,
-    updatedAt: new Date().toISOString(),
-    lastWriteClientId: clientId
-  };
-
-  if (!isFirebaseEnabled || !window.firebase?.db) {
-    const message = 'Firebaseが無効のため、イベントを更新できません。設定を確認してください。';
-    console.error(message);
-    showMessage(message, 'error', 6000);
-    return;
-  }
-
   try {
-  // Firebaseの場合、ローカルのevents配列は更新しない
-  // Firebaseのリアルタイムリスナーが自動的に更新する
-  const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
-  window.firebase.update(eventRef, updatedEvent);
-  console.log('Firebaseでイベントを更新:', id);
+    const existingEvent = Array.isArray(events) ? events.find(e => e.id === id) : null;
+    
+    // 既存イベントが存在しない場合の警告
+    if (!existingEvent) {
+      console.warn(`updateEvent: イベントID ${id} が見つかりません。新規作成として処理します。`);
+    }
+
+    const startSource = event.startTime ?? existingEvent?.startTime ?? '';
+    const endSource = event.endTime ?? existingEvent?.endTime ?? '';
+    const normalizedStart = normalizeEventDateTimeString(startSource);
+    const normalizedEnd = normalizeEventDateTimeString(endSource);
+    
+    const updatedEvent = {
+      ...(existingEvent || {}),
+      ...event,
+      startTime: normalizedStart || startSource,
+      endTime: normalizedEnd || endSource,
+      allDay: event.allDay === true,
+      isTimetable: event.isTimetable === true ? true : (existingEvent?.isTimetable === true),
+      source: event.source || existingEvent?.source || 'local',
+      googleEventId: event.googleEventId || existingEvent?.googleEventId || null,
+      isGoogleImported:
+        event.isGoogleImported === true
+          ? true
+          : (existingEvent?.isGoogleImported === true),
+      externalUpdatedAt: event.externalUpdatedAt || existingEvent?.externalUpdatedAt || null,
+      updatedAt: new Date().toISOString(),
+      lastWriteClientId: clientId
+    };
+
+    if (!isFirebaseEnabled || !window.firebase?.db) {
+      const message = 'Firebaseが無効のため、イベントを更新できません。設定を確認してください。';
+      console.error(message);
+      showMessage(message, 'error', 6000);
+      throw new Error(message);
+    }
+
+    // リトライロジック付きでFirebaseを更新
+    await retryOperation(async () => {
+      const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
+      await window.firebase.update(eventRef, updatedEvent);
+      console.log('Firebaseでイベントを更新:', id);
+    });
+
+    // ローカル配列も更新（Firebaseのリアルタイムリスナーが後で更新するが、即座のUI更新のため）
+    if (Array.isArray(events)) {
+      const eventIndex = events.findIndex(e => e.id === id);
+      if (eventIndex !== -1) {
+        events[eventIndex] = {
+          ...events[eventIndex],
+          ...updatedEvent,
+          id: id
+        };
+        // UIを即座に更新
+        updateViews();
+      }
+    }
   } catch (error) {
     console.error('Firebaseでイベントの更新に失敗しました。', error);
     showMessage('イベントの更新に失敗しました。ネットワーク状況を確認してください。', 'error', 6000);
+    throw error;
+  } finally {
+    releaseLock();
   }
 }
 
-// イベントを削除（combiと同じロジック）
-function deleteEvent(id) {
+// イベントを削除（改善版：非同期処理とエラーハンドリング強化、操作ロック追加）
+async function deleteEvent(id) {
+  if (!id) {
+    console.error('deleteEvent: イベントIDが指定されていません');
+    throw new Error('イベントIDが指定されていません');
+  }
+
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、イベントを削除できません。設定を確認してください。';
     console.error(message);
     showMessage(message, 'error', 6000);
-    return;
+    throw new Error(message);
   }
 
+  // 操作ロックを取得
+  const releaseLock = await acquireLock('delete');
+  
   try {
-  const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
-  window.firebase.remove(eventRef);
-  console.log('Firebaseからイベントを削除:', id);
+    // リトライロジック付きでFirebaseから削除
+    await retryOperation(async () => {
+      const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
+      await window.firebase.remove(eventRef);
+      console.log('Firebaseからイベントを削除:', id);
+    });
+    
+    // ローカル配列からも削除（Firebaseのリアルタイムリスナーが更新するが、念のため即座に更新）
+    if (Array.isArray(events)) {
+      const eventIndex = events.findIndex(e => e.id === id);
+      if (eventIndex !== -1) {
+        events.splice(eventIndex, 1);
+        console.log('ローカル配列からもイベントを削除:', id);
+      }
+    }
+    
+    // UIを即座に更新（Firebaseのリアルタイムリスナーが後で更新するが、即座のフィードバックのため）
+    updateViews();
+    clearScheduledNotifications();
+    
+    return true;
   } catch (error) {
     console.error('Firebaseからイベントを削除できませんでした。', error);
     showMessage('イベントの削除に失敗しました。再度お試しください。', 'error', 6000);
+    throw error;
+  } finally {
+    releaseLock();
   }
 }
 
@@ -951,16 +1095,18 @@ async function cleanupDuplicateEvents({ silent = false } = {}) {
       console.log(`自動重複整理: ${toDelete.length} 件の重複イベントを削除します`);
     }
 
-    // 重複イベントを削除
+    // 重複イベントを削除（リトライロジック付き）
     let deletedCount = 0;
     let errorCount = 0;
     
     for (const event of toDelete) {
       try {
-        const eventRef = window.firebase.ref(window.firebase.db, `events/${event.id}`);
-        await window.firebase.remove(eventRef);
+        await retryOperation(async () => {
+          const eventRef = window.firebase.ref(window.firebase.db, `events/${event.id}`);
+          await window.firebase.remove(eventRef);
+          console.log(`重複イベントを削除: ${event.id} - ${event.title}`);
+        });
         deletedCount++;
-        console.log(`重複イベントを削除: ${event.id} - ${event.title}`);
       } catch (error) {
         console.error(`イベント削除エラー (${event.id}):`, error);
         errorCount++;
@@ -2885,35 +3031,26 @@ function setupEventListeners() {
           createdAt: new Date().toISOString()
         };
         
-        // Firebaseに保存（成功後にローカル配列を更新）
-        const newId = addEvent(newEvent);
-        if (newId && !isFirebaseEnabled) {
-          // Firebaseが無効な場合のみローカル配列に追加
-          newEvent.id = newId;
-          events.push(newEvent);
+        // Firebaseに保存（非同期処理で信頼性向上）
+        try {
+          const newId = await addEvent(newEvent);
+          if (newId && !isFirebaseEnabled) {
+            // Firebaseが無効な場合のみローカル配列に追加
+            newEvent.id = newId;
+            events.push(newEvent);
+          }
+        } catch (error) {
+          console.error('イベントの追加に失敗しました:', error);
+          throw error; // エラーを上位に伝播
         }
       } else if (editingEventId) {
-        // 既存イベントを更新
-        // Firebase更新を先に実行し、成功後にローカル配列を更新
-        updateEvent(editingEventId, event);
-        // ローカル配列も更新（Firebaseのリアルタイム更新で上書きされる可能性があるが、即座のUI更新のため）
-        if (Array.isArray(events)) {
-          const eventIndex = events.findIndex(e => e.id === editingEventId);
-          if (eventIndex !== -1) {
-            events[eventIndex] = {
-              ...events[eventIndex],
-              title: event.title,
-              description: event.description,
-              startTime: event.startTime,
-              endTime: event.endTime,
-              allDay: event.allDay === true,
-              color: event.color,
-              recurrence: event.recurrence,
-              recurrenceEnd: event.recurrenceEnd,
-              reminderMinutes: event.reminderMinutes,
-              updatedAt: new Date().toISOString()
-            };
-          }
+        // 既存イベントを更新（非同期処理で信頼性向上）
+        try {
+          await updateEvent(editingEventId, event);
+          // updateEvent内でローカル配列も更新されるため、ここでの更新は不要
+        } catch (error) {
+          console.error('イベントの更新に失敗しました:', error);
+          throw error; // エラーを上位に伝播
         }
       } else {
         // 新規イベントを作成
@@ -2950,20 +3087,39 @@ function setupEventListeners() {
   const deleteBtn = safeGetElementById('deleteBtn');
   if (deleteBtn) {
     deleteBtn.addEventListener('click', async () => {
-      if (!editingEventId) return;
+      if (!editingEventId) {
+        console.warn('削除ボタン: editingEventIdが設定されていません');
+        return;
+      }
+      
+      // 一時的イベントの場合は削除しない（通常の削除処理をスキップ）
+      if (typeof editingEventId === 'string' && editingEventId.startsWith('temp-')) {
+        closeEventModal();
+        return;
+      }
       
       const confirmed = await showConfirmModal('この予定を削除してもよろしいですか？', '削除の確認');
-      if (confirmed) {
-        try {
-          showLoading('削除中...');
-          deleteEvent(editingEventId);
-          hideLoading();
-          closeEventModal();
-          showMessage('予定を削除しました', 'success', 3000);
-        } catch (error) {
-          hideLoading();
-          console.error('イベント削除エラー:', error);
-          showMessage('イベントの削除に失敗しました。', 'error', 6000);
+      if (!confirmed) {
+        return;
+      }
+      
+      const eventIdToDelete = editingEventId;
+      try {
+        showLoading('削除中...');
+        
+        // 削除を実行（非同期で完了を待つ）
+        await deleteEvent(eventIdToDelete);
+        
+        // 削除成功後の処理
+        hideLoading();
+        closeEventModal();
+        showMessage('予定を削除しました', 'success', 3000);
+      } catch (error) {
+        hideLoading();
+        console.error('イベント削除エラー:', error);
+        // エラーメッセージはdeleteEvent内で表示されるが、念のため表示
+        if (!error.message || !error.message.includes('Firebaseが無効')) {
+          showMessage('イベントの削除に失敗しました。再度お試しください。', 'error', 6000);
         }
       }
     });
@@ -3445,4 +3601,5 @@ function attachResizeHandlers() {
     item.addEventListener('touchstart', onEventTouchStart);
   });
 }
+
 
