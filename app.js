@@ -2652,23 +2652,6 @@ document.addEventListener('DOMContentLoaded', function() {
   
   console.log('アプリケーション初期化完了');
   
-  // 初期化後に重複イベントを自動整理（サイレントモード）
-  // ユーザーに確認を求めずに自動的に整理し、結果のみ通知
-  setTimeout(async () => {
-    try {
-      const result = await cleanupDuplicateEvents({ silent: true });
-      if (result && result.removed > 0) {
-        console.log(`自動重複整理完了: ${result.removed} 件の重複イベントを削除しました`);
-        // 結果は cleanupDuplicateEvents 内で通知される
-      } else if (result && result.total > 0) {
-        console.log(`自動重複整理: 重複イベントは見つかりませんでした（全 ${result.total} 件）`);
-      }
-    } catch (error) {
-      console.error('自動重複整理エラー:', error);
-      // エラーはサイレントに処理（ユーザーに通知しない）
-    }
-  }, 3000); // 3秒後に実行（イベント読み込み完了を待つ）
-  
   startAutomaticGoogleSync();
 });
 
