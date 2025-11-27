@@ -1,4 +1,7 @@
 let unsubscribeEvents = null;
+let unsubscribeChildAdded = null;
+let unsubscribeChildChanged = null;
+let unsubscribeChildRemoved = null;
 
 // グローバル変数
 let events = [];
@@ -12,12 +15,62 @@ let googleSyncIntervalId = null;
 let googleSyncTimeoutId = null;
 let googleSyncInFlight = false;
 const GOOGLE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const INITIAL_GOOGLE_SYNC_DELAY_MS = 30 * 1000; // 30 seconds
+const INITIAL_GOOGLE_SYNC_DELAY_MS = 5 * 1000; // 5 seconds
 const VISIBLE_START_HOUR = 4;
 const VISIBLE_END_HOUR = 23;
-const HOUR_HEIGHT_PX = 25;
+const HOUR_HEIGHT_PX = 25; // フォールバック値（実際の値は動的に取得）
 const MIN_EVENT_HEIGHT_PX = 15;
 const VISIBLE_HOURS = VISIBLE_END_HOUR - VISIBLE_START_HOUR + 1;
+
+// 時間スロットの実際の高さを取得（1時間分）
+function getHourHeight() {
+  // 日次ビューまたは週次ビューの時間スロットを探す
+  const timeSlot = document.querySelector('.time-slot');
+  if (timeSlot) {
+    const rect = timeSlot.getBoundingClientRect();
+    if (rect.height > 0) {
+      return rect.height;
+    }
+  }
+  // フォールバック: 週次ビューのday-events-containerの高さを20で割る（優先）
+  const weekContainer = document.querySelector('.day-events-container');
+  if (weekContainer) {
+    const rect = weekContainer.getBoundingClientRect();
+    if (rect.height > 0) {
+      return rect.height / 20;
+    }
+  }
+  // フォールバック: イベントコンテナの高さを20で割る（日次ビュー）
+  const dayContainer = document.querySelector('.event-container');
+  if (dayContainer) {
+    const rect = dayContainer.getBoundingClientRect();
+    if (rect.height > 0) {
+      return rect.height / 20;
+    }
+  }
+  return HOUR_HEIGHT_PX;
+}
+
+// 16進数カラーをRGBに変換
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : null;
+}
+
+const viewCaches = {
+  day: {
+    allDay: new Map(),
+    timed: new Map(),
+  },
+  week: {
+    allDay: Array.from({ length: 7 }, () => new Map()),
+    timed: Array.from({ length: 7 }, () => new Map()),
+  },
+};
 
 // Google Apps Script Web アプリ（POSTエンドポイント）
 // デプロイ済み Google Apps Script Web アプリの URL
@@ -153,8 +206,81 @@ function checkFirebase() {
   return false;
 }
 
-// イベントを読み込む関数（combiと同じロジック）
-function loadEvents() {
+// 特定のイベントが影響するビューだけを更新
+function updateViewsForEvent(event) {
+  if (!event || !event.id) return;
+  
+  const allowedRanges = getAllowedDateRanges();
+  if (!isEventInAllowedRange(event, allowedRanges)) {
+    // 範囲外のイベントは削除のみ処理
+    if (currentView === 'day') {
+      renderDayView();
+    } else if (currentView === 'week') {
+      renderWeekView();
+    } else if (currentView === 'month') {
+      renderMonthView();
+    }
+    scheduleAllNotifications();
+    return;
+  }
+  
+  // イベントが表示される日付を計算
+  const eventDate = event.startTime ? new Date(event.startTime.split('T')[0]) : null;
+  if (!eventDate || Number.isNaN(eventDate.getTime())) {
+    updateViews();
+    return;
+  }
+  
+  // 日次ビュー: 該当日だけ更新
+  if (currentView === 'day') {
+    const dayStr = formatDate(currentDate, 'YYYY-MM-DD');
+    const eventDayStr = formatDate(eventDate, 'YYYY-MM-DD');
+    if (dayStr === eventDayStr) {
+      renderDayView();
+    }
+  }
+  // 週次ビュー: 該当週だけ更新
+  else if (currentView === 'week') {
+    const weekStart = getWeekStart(currentDate);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    if (eventDate >= weekStart && eventDate <= weekEnd) {
+      renderWeekView();
+    }
+  }
+  // 月次ビュー: 該当月だけ更新
+  else if (currentView === 'month') {
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    if (eventDate.getMonth() === currentMonth && eventDate.getFullYear() === currentYear) {
+      renderMonthView();
+    }
+  }
+  
+  scheduleAllNotifications();
+}
+
+// イベントを正規化
+function normalizeEventFromSnapshot(snapshot, key) {
+  const payload = snapshot.val() || {};
+  const normalizedStart = normalizeEventDateTimeString(payload.startTime) || payload.startTime || '';
+  const normalizedEnd = normalizeEventDateTimeString(payload.endTime) || payload.endTime || '';
+  return {
+    ...payload,
+    id: key,
+    startTime: normalizedStart,
+    endTime: normalizedEnd,
+    allDay: payload.allDay === true,
+    isTimetable: payload.isTimetable === true,
+    source: payload.source || 'local',
+    googleEventId: payload.googleEventId || null,
+    isGoogleImported: payload.isGoogleImported === true,
+    externalUpdatedAt: payload.externalUpdatedAt || null,
+  };
+}
+
+// イベントを読み込む関数（差分更新版）
+async function loadEvents() {
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、予定を読み込めません。設定を確認してください。';
     console.error(message);
@@ -165,66 +291,164 @@ function loadEvents() {
   const allowedRanges = getAllowedDateRanges();
   logAllowedRanges('Firebase');
   
+  // 既存のリスナーを解除
   if (typeof unsubscribeEvents === 'function') {
     unsubscribeEvents();
     unsubscribeEvents = null;
   }
+  if (typeof unsubscribeChildAdded === 'function') {
+    unsubscribeChildAdded();
+    unsubscribeChildAdded = null;
+  }
+  if (typeof unsubscribeChildChanged === 'function') {
+    unsubscribeChildChanged();
+    unsubscribeChildChanged = null;
+  }
+  if (typeof unsubscribeChildRemoved === 'function') {
+    unsubscribeChildRemoved();
+    unsubscribeChildRemoved = null;
+  }
   
   const eventsRef = window.firebase.ref(window.firebase.db, "events");
-  unsubscribeEvents = window.firebase.onValue(eventsRef, (snapshot) => {
+  
+  // 初回: 全件取得
+  try {
+    const snapshot = await window.firebase.get(eventsRef);
     const data = snapshot.val();
     if (data && typeof data === 'object' && !Array.isArray(data)) {
       const newEvents = Object.keys(data).map(key => {
         const payload = data[key] || {};
-        const normalizedStart = normalizeEventDateTimeString(payload.startTime) || payload.startTime || '';
-        const normalizedEnd = normalizeEventDateTimeString(payload.endTime) || payload.endTime || '';
-        return {
-          ...payload,
-          id: key,
-          startTime: normalizedStart,
-          endTime: normalizedEnd,
-          allDay: payload.allDay === true,
-          isTimetable: payload.isTimetable === true,
-          source: payload.source || 'local',
-          googleEventId: payload.googleEventId || null,
-          isGoogleImported: payload.isGoogleImported === true,
-          externalUpdatedAt: payload.externalUpdatedAt || null,
-        };
+        return normalizeEventFromSnapshot({ val: () => payload }, key);
       });
       const filteredEvents = newEvents.filter(ev => isEventInAllowedRange(ev, allowedRanges));
-
-      // 重複チェック：IDが同じで内容が同じ場合は更新をスキップ
-      const hasChanges = !Array.isArray(events) || filteredEvents.length !== events.length || 
-        filteredEvents.some(newEvent => {
-          const oldEvent = Array.isArray(events) ? events.find(e => e.id === newEvent.id) : null;
-          return !oldEvent || (oldEvent.updatedAt !== newEvent.updatedAt);
-        });
+      events = filteredEvents;
+      events.sort((a, b) => {
+        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return aTime - bTime;
+      });
+      console.log('Firebaseからイベントを初回読み込み:', events.length, '件');
       
-      if (hasChanges) {
-        events = filteredEvents;
-        // 開始時刻でソート（無効な日付は最後に）
-        events.sort((a, b) => {
-          const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
-          const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
-          if (Number.isNaN(aTime)) return 1;
-          if (Number.isNaN(bTime)) return -1;
-          return aTime - bTime;
-        });
-        console.log('Firebaseからイベントを読み込み:', events.length, '件');
-        updateViews();
-        scheduleAllNotifications();
+      // Firebase内の重複チェックを実行
+      try {
+        const { deleted } = await deduplicateFirebaseEvents();
+        if (deleted > 0) {
+          console.log(`[Firebase重複削除] 初回読み込み時に ${deleted}件の重複を削除しました`);
+        }
+      } catch (error) {
+        console.error('[Firebase重複削除] エラー:', error);
       }
+      
+      updateViews();
+      scheduleAllNotifications();
     } else {
-      if (Array.isArray(events) && events.length > 0) {
-        events = [];
-        console.log('イベントデータがありません');
-        updateViews();
+      events = [];
+      updateViews();
+    }
+  } catch (error) {
+    console.error('Firebaseからの初回読み込みに失敗しました。', error);
+    showMessage('予定の読み込みに失敗しました。ネットワークを確認してください。', 'error', 6000);
+    return;
+  }
+  
+  // 以降: child イベントで差分更新
+  unsubscribeChildAdded = window.firebase.onChildAdded(eventsRef, (snapshot) => {
+    const key = snapshot.key;
+    if (!key) return;
+    
+    const newEvent = normalizeEventFromSnapshot(snapshot, key);
+    if (!isEventInAllowedRange(newEvent, allowedRanges)) return;
+    
+    // 既存のイベントをチェック
+    const existingIndex = events.findIndex(e => e.id === key);
+    if (existingIndex === -1) {
+      events.push(newEvent);
+      events.sort((a, b) => {
+        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return aTime - bTime;
+      });
+      console.log('Firebase: イベント追加', key);
+      updateViewsForEvent(newEvent);
+    }
+  }, (error) => {
+    console.error('Firebase onChildAdded エラー:', error);
+  });
+  
+  unsubscribeChildChanged = window.firebase.onChildChanged(eventsRef, (snapshot) => {
+    const key = snapshot.key;
+    if (!key) return;
+    
+    const updatedEvent = normalizeEventFromSnapshot(snapshot, key);
+    const existingIndex = events.findIndex(e => e.id === key);
+    
+    if (existingIndex !== -1) {
+      const oldEvent = events[existingIndex];
+      // updatedAt が変わっていない場合はスキップ（無限ループ防止）
+      if (oldEvent.updatedAt === updatedEvent.updatedAt && oldEvent.lastWriteClientId === updatedEvent.lastWriteClientId) {
+        return;
+      }
+      
+      events[existingIndex] = updatedEvent;
+      events.sort((a, b) => {
+        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return aTime - bTime;
+      });
+      
+      const wasInRange = isEventInAllowedRange(oldEvent, allowedRanges);
+      const isInRange = isEventInAllowedRange(updatedEvent, allowedRanges);
+      
+      console.log('Firebase: イベント更新', key);
+      // 範囲外→範囲内、範囲内→範囲外、範囲内で日付変更の場合は更新
+      if (wasInRange || isInRange) {
+        updateViewsForEvent(updatedEvent);
+        if (wasInRange && !isInRange) {
+          // 範囲外に移動した場合、旧日付も更新
+          updateViewsForEvent(oldEvent);
+        }
       }
     }
   }, (error) => {
-    console.error('Firebaseからの読み込みに失敗しました。', error);
-    showMessage('予定の読み込みに失敗しました。ネットワークを確認してください。', 'error', 6000);
+    console.error('Firebase onChildChanged エラー:', error);
   });
+  
+  unsubscribeChildRemoved = window.firebase.onChildRemoved(eventsRef, (snapshot) => {
+    const key = snapshot.key;
+    if (!key) return;
+    
+    const existingIndex = events.findIndex(e => e.id === key);
+    if (existingIndex !== -1) {
+      const removedEvent = events[existingIndex];
+      events.splice(existingIndex, 1);
+      console.log('Firebase: イベント削除', key);
+      updateViewsForEvent(removedEvent);
+    }
+  }, (error) => {
+    console.error('Firebase onChildRemoved エラー:', error);
+  });
+  
+  // 統合解除関数
+  unsubscribeEvents = () => {
+    if (typeof unsubscribeChildAdded === 'function') {
+      unsubscribeChildAdded();
+      unsubscribeChildAdded = null;
+    }
+    if (typeof unsubscribeChildChanged === 'function') {
+      unsubscribeChildChanged();
+      unsubscribeChildChanged = null;
+    }
+    if (typeof unsubscribeChildRemoved === 'function') {
+      unsubscribeChildRemoved();
+      unsubscribeChildRemoved = null;
+    }
+  };
 }
 
 function buildSyncEventPayload(event) {
@@ -244,6 +468,86 @@ function buildSyncEventPayload(event) {
         ? event.reminderMinutes
         : null,
     color: event.color || null,
+  };
+}
+
+async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = false } = {}) {
+  if (!GOOGLE_APPS_SCRIPT_ENDPOINT) {
+    const message = 'Google Apps Script の Web アプリ URL が設定されていません。';
+    showMessage(message, 'error', 6000);
+    throw new Error(message);
+  }
+
+  const filteredUpserts = Array.isArray(upserts)
+    ? upserts.filter(ev => ev && ev.id && ev.isTimetable !== true)
+    : [];
+  const filteredDeletes = Array.isArray(deletes)
+    ? deletes.filter(id => typeof id === 'string' && id.trim().length > 0)
+    : [];
+
+  if (filteredUpserts.length === 0 && filteredDeletes.length === 0) {
+    return { created: 0, updated: 0, deleted: 0, skipped: 0 };
+  }
+
+  const payload = {
+    action: 'mutations',
+    source: 'schedule_mgr',
+    exportedAt: new Date().toISOString(),
+    upserts: filteredUpserts.map(buildSyncEventPayload),
+    deletes: filteredDeletes,
+  };
+
+  let response;
+  try {
+    response = await fetch(GOOGLE_APPS_SCRIPT_ENDPOINT, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      mode: 'cors',
+    });
+  } catch (error) {
+    showMessage('Googleカレンダー更新に失敗しました。ネットワークを確認してください。', 'error', 6000);
+    throw error;
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    const message = `Googleカレンダー更新に失敗しました (${response.status}) ${errorText || ''}`.trim();
+    showMessage(message, 'error', 6000);
+    throw new Error(message);
+  }
+
+  let result;
+  try {
+    result = await response.json();
+  } catch (error) {
+    const message = 'Googleカレンダー応答の解析に失敗しました。';
+    showMessage(message, 'error', 6000);
+    throw error;
+  }
+
+  if (result?.success === false) {
+    const message = result?.message || 'Googleカレンダー更新に失敗しました。';
+    showMessage(message, 'error', 6000);
+    throw new Error(message);
+  }
+
+  if (!silent) {
+    showMessage('Googleカレンダーを更新しました。', 'success', 4000);
+  }
+  console.log(
+    '[Google Sync] 更新完了',
+    `upserts=${filteredUpserts.length}`,
+    `deletes=${filteredDeletes.length}`,
+    `created=${Number(result?.created) || 0}`,
+    `updated=${Number(result?.updated) || 0}`,
+    `deleted=${Number(result?.deleted) || 0}`,
+    `skipped=${Number(result?.skipped) || 0}`
+  );
+  return {
+    created: Number(result?.created) || 0,
+    updated: Number(result?.updated) || 0,
+    deleted: Number(result?.deleted) || 0,
+    skipped: Number(result?.skipped) || 0,
   };
 }
 
@@ -412,24 +716,22 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   }
 
   const googleEvents = Array.isArray(result?.events) ? result.events : [];
-  const { created, updated } = mergeGoogleEvents(googleEvents, rangeSet);
+  const { created, updated, deleted } = await mergeGoogleEvents(googleEvents, rangeSet);
   if (!silent) {
     hideLoading();
     showMessage(
-      `Googleカレンダーから取得: ${googleEvents.length}件 (新規:${created} / 更新:${updated})`,
+      `Googleカレンダーから取得: ${googleEvents.length}件 (新規:${created} / 更新:${updated} / 重複削除:${deleted})`,
       'success',
       6000
     );
   } else {
     // Always hide loading, even in silent mode
     hideLoading();
-    if (googleEvents.length > 0) {
-      console.log(
-        `Google fetch: total=${googleEvents.length} created=${created} updated=${updated}`
-      );
-    }
+    console.log(
+      `Google fetch: total=${googleEvents.length} created=${created} updated=${updated} deleted=${deleted}`
+    );
   }
-  return { created, updated, total: googleEvents.length };
+  return { created, updated, deleted: deleted || 0, total: googleEvents.length };
 }
 
 async function clearGoogleCalendarEvents({ silent = false } = {}) {
@@ -473,14 +775,148 @@ async function clearGoogleCalendarEvents({ silent = false } = {}) {
   return { deleted: Number(result.deleted) || 0 };
 }
 
-function mergeGoogleEvents(googleEvents = [], ranges) {
+// タイトル比較用に正規化
+function normalizeTitleForComparison(title) {
+  if (!title && title !== 0) return '';
+  return String(title)
+    .trim()
+    .replace(/\s+/g, '') // 全ての空白を除去
+    .toLowerCase();
+}
+
+function buildDateTitleKey(startTime, title) {
+  if (!startTime) return null;
+  const dateKey = formatDateOnly(startTime);
+  if (!dateKey) return null;
+  const titleKey = normalizeTitleForComparison(title || '');
+  return `${dateKey}__${titleKey}`;
+}
+
+// Firebase内の全イベントに対して重複チェックを実行（Google由来を優先）
+async function deduplicateFirebaseEvents() {
+  if (!Array.isArray(events) || events.length === 0) {
+    return { deleted: 0 };
+  }
+
+  const rangeSet = getAllowedDateRanges();
+  let deleted = 0;
+
+  // すべてのイベントを日付＋タイトルでグルーピング
+  const eventsByDateTitle = new Map();
+  for (const ev of events) {
+    if (!ev?.startTime) continue;
+    if (ev.isTimetable === true) continue;
+    if (!isEventInAllowedRange(ev, rangeSet)) continue;
+
+    const key = buildDateTitleKey(ev.startTime, ev.title || '');
+    if (!key) continue;
+    if (!eventsByDateTitle.has(key)) {
+      eventsByDateTitle.set(key, []);
+    }
+    eventsByDateTitle.get(key).push(ev);
+  }
+
+  // 各グループで重複チェック
+  for (const [key, duplicates] of eventsByDateTitle.entries()) {
+    if (duplicates.length <= 1) continue; // 重複なし
+
+    // Google由来のイベントを優先
+    const googleEvents = duplicates.filter(
+      ev => ev.source === 'google' || ev.isGoogleImported === true
+    );
+    const localEvents = duplicates.filter(
+      ev => ev.source !== 'google' && ev.isGoogleImported !== true
+    );
+
+    // Google由来が1つ以上ある場合、ローカルを削除
+    if (googleEvents.length > 0) {
+      const dateLabel = formatDateOnly(duplicates[0].startTime) || '';
+      console.log(
+        `[Firebase重複チェック] "${duplicates[0].title || '(無題)'}" (${dateLabel}) -> ${duplicates.length}件 (Google:${googleEvents.length}, ローカル:${localEvents.length})`
+      );
+
+      // Google由来が複数ある場合、1つだけ残す（最新のもの）
+      if (googleEvents.length > 1) {
+        googleEvents.sort((a, b) => {
+          const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+          const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+          return bTime - aTime; // 新しい順
+        });
+        // 最新以外のGoogle由来イベントを削除
+        for (let i = 1; i < googleEvents.length; i++) {
+          try {
+            const deletedOk = await deleteEvent(googleEvents[i].id, { syncGoogle: false });
+            if (deletedOk) {
+              deleted += 1;
+              console.log(
+                `[Firebase重複削除] Google由来の重複を削除: "${googleEvents[i].title || '(無題)'}" (${googleEvents[i].id})`
+              );
+            }
+          } catch (error) {
+            console.error(`[Firebase重複削除] 削除に失敗:`, googleEvents[i].id, error);
+          }
+        }
+      }
+
+      // すべてのローカルイベントを削除
+      for (const localEvent of localEvents) {
+        try {
+          const deletedOk = await deleteEvent(localEvent.id, { syncGoogle: false });
+          if (deletedOk) {
+            deleted += 1;
+            console.log(
+              `[Firebase重複削除] ローカルイベントを削除: "${localEvent.title || '(無題)'}" (${localEvent.id}) - Google由来を優先`
+            );
+          }
+        } catch (error) {
+          console.error(`[Firebase重複削除] 削除に失敗:`, localEvent.id, error);
+        }
+      }
+    } else {
+      // Google由来がない場合、ローカル同士の重複を1つだけ残す（最新のもの）
+      if (localEvents.length > 1) {
+        localEvents.sort((a, b) => {
+          const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+          const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+          return bTime - aTime; // 新しい順
+        });
+        const dateLabel = formatDateOnly(localEvents[0].startTime) || '';
+        console.log(
+          `[Firebase重複チェック] ローカルのみ "${localEvents[0].title || '(無題)'}" (${dateLabel}) -> ${localEvents.length}件`
+        );
+        // 最新以外を削除
+        for (let i = 1; i < localEvents.length; i++) {
+          try {
+            const deletedOk = await deleteEvent(localEvents[i].id, { syncGoogle: false });
+            if (deletedOk) {
+              deleted += 1;
+              console.log(
+                `[Firebase重複削除] ローカル重複を削除: "${localEvents[i].title || '(無題)'}" (${localEvents[i].id})`
+              );
+            }
+          } catch (error) {
+            console.error(`[Firebase重複削除] 削除に失敗:`, localEvents[i].id, error);
+          }
+        }
+      }
+    }
+  }
+
+  if (deleted > 0) {
+    console.log(`[Firebase重複削除] 完了: ${deleted}件の重複を削除しました`);
+  }
+  return { deleted };
+}
+
+async function mergeGoogleEvents(googleEvents = [], ranges) {
   let created = 0;
   let updated = 0;
+  let deleted = 0;
 
   // Ensure events is an array
   if (!Array.isArray(events)) {
     console.warn('mergeGoogleEvents: events is not an array');
-    return { created: 0, updated: 0 };
+    return { created: 0, updated: 0, deleted: 0 };
   }
 
   const eventsById = new Map(events.map(ev => [ev.id, ev]));
@@ -492,57 +928,190 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
 
   const rangeSet = ranges || getAllowedDateRanges();
 
-  googleEvents.forEach(googleEvent => {
+  // すべてのイベントを日付＋タイトルでグルーピング
+  const eventsByDateTitle = new Map();
+  const registerEventByKey = (ev) => {
+    if (!ev?.startTime) return;
+    if (ev.isTimetable === true) return;
+    if (!isEventInAllowedRange(ev, rangeSet)) return;
+    const key = buildDateTitleKey(ev.startTime, ev.title || '');
+    if (!key) return;
+    if (!eventsByDateTitle.has(key)) {
+      eventsByDateTitle.set(key, []);
+    }
+    eventsByDateTitle.get(key).push({
+      id: ev.id,
+      title: ev.title || '',
+      startTime: ev.startTime,
+      source: ev.source || '',
+      isGoogleImported: ev.isGoogleImported === true,
+      googleEventId: ev.googleEventId || null,
+    });
+  };
+  events.forEach(registerEventByKey);
+
+  const updateKeyEntry = (key, eventLike) => {
+    if (!key) return;
+    if (!eventLike) {
+      eventsByDateTitle.delete(key);
+      return;
+    }
+    eventsByDateTitle.set(key, [eventLike]);
+  };
+
+  for (const googleEvent of googleEvents) {
     const normalized = normalizeGoogleEvent(googleEvent, rangeSet);
-    if (normalized.filteredOut) return;
-    if (!normalized.startTime || !normalized.endTime) return;
+    if (normalized.filteredOut) continue;
+    if (!normalized.startTime || !normalized.endTime) continue;
+
+    const key = buildDateTitleKey(normalized.startTime, normalized.title || '');
+    const dateLabel = formatDateOnly(normalized.startTime) || normalized.startTime || '';
+    const linkedId =
+      googleEvent.scheduleMgrId && eventsById.has(googleEvent.scheduleMgrId)
+        ? googleEvent.scheduleMgrId
+        : null;
+
+    if (key) {
+      const duplicates = eventsByDateTitle.get(key) || [];
+      const keeperIds = new Set();
+      if (linkedId) {
+        keeperIds.add(linkedId);
+      }
+      if (normalized.googleEventId) {
+        const match = duplicates.find(ev => ev.googleEventId === normalized.googleEventId);
+        if (match) {
+          keeperIds.add(match.id);
+        }
+      }
+      if (keeperIds.size === 0) {
+        const googleCandidate = duplicates.find(ev => ev.source === 'google' || ev.isGoogleImported === true);
+        if (googleCandidate) {
+          keeperIds.add(googleCandidate.id);
+        }
+      }
+      const shouldDeleteAll = keeperIds.size === 0;
+
+      console.log(
+        `[Google Sync] 重複チェック: "${normalized.title || '(無題)'}" (${dateLabel}) -> ${duplicates.length}件`
+      );
+
+      if (duplicates.length > 0) {
+        const survivors = [];
+        for (const duplicate of duplicates) {
+          const keepThis = !shouldDeleteAll && keeperIds.has(duplicate.id);
+          if (keepThis) {
+            survivors.push(duplicate);
+            continue;
+          }
+          try {
+            const deletedOk = await deleteEvent(duplicate.id, { syncGoogle: false });
+            if (deletedOk) {
+              deleted += 1;
+              eventsById.delete(duplicate.id);
+              console.log(
+                `[Google Sync] 重複削除: "${duplicate.title || '(無題)'}" (${duplicate.id}) - Google由来を優先`
+              );
+            } else {
+              survivors.push(duplicate);
+            }
+          } catch (error) {
+            console.error(`[Google Sync] 重複イベントの削除に失敗:`, duplicate.id, error);
+            survivors.push(duplicate);
+          }
+        }
+        if (survivors.length > 0) {
+          eventsByDateTitle.set(key, survivors);
+        } else {
+          eventsByDateTitle.delete(key);
+        }
+      }
+    }
 
     if (googleEvent.scheduleMgrId && eventsById.has(googleEvent.scheduleMgrId)) {
       const existing = eventsById.get(googleEvent.scheduleMgrId);
       if (existing.isTimetable === true) {
-        return;
+        continue;
       }
       if (!isEventInAllowedRange(existing, rangeSet)) {
-        return;
+        continue;
       }
       if (needsExternalUpdate(existing, normalized)) {
-        updateEvent(googleEvent.scheduleMgrId, normalized);
+        await updateEvent(
+          googleEvent.scheduleMgrId,
+          {
+            ...normalized,
+            source: 'google',
+            isGoogleImported: true,
+          },
+          { syncGoogle: false }
+        );
         updated += 1;
       }
-      return;
+      if (key) {
+        updateKeyEntry(key, {
+          id: googleEvent.scheduleMgrId,
+          title: normalized.title || '',
+          startTime: normalized.startTime,
+          source: 'google',
+          isGoogleImported: true,
+          googleEventId: normalized.googleEventId || null,
+        });
+      }
+      continue;
     }
 
     if (normalized.googleEventId && eventsByGoogleId.has(normalized.googleEventId)) {
       const existing = eventsByGoogleId.get(normalized.googleEventId);
        if (existing.isTimetable === true) {
-        return;
+        continue;
       }
       if (!isEventInAllowedRange(existing, rangeSet)) {
-        return;
+        continue;
       }
       if (needsExternalUpdate(existing, normalized)) {
-        updateEvent(existing.id, {
+        await updateEvent(existing.id, {
           ...normalized,
           source: existing.source || 'google',
           isGoogleImported: true,
-        });
+        }, { syncGoogle: false });
         updated += 1;
       }
-      return;
+      continue;
     }
 
-    const newEventId = addEvent({
+    const newEventId = await addEvent({
       ...normalized,
       isTimetable: false,
       source: 'google',
       isGoogleImported: true,
-    });
+    }, { syncGoogle: false });
     if (newEventId) {
       created += 1;
+      if (key) {
+        updateKeyEntry(key, {
+          id: newEventId,
+          title: normalized.title || '',
+          startTime: normalized.startTime,
+          source: 'google',
+          isGoogleImported: true,
+          googleEventId: normalized.googleEventId || null,
+        });
+      }
     }
-  });
+  }
 
-  return { created, updated };
+  // Firebase内の全イベントに対して重複チェックを実行
+  try {
+    const { deleted: firebaseDeleted } = await deduplicateFirebaseEvents();
+    if (firebaseDeleted > 0) {
+      deleted += firebaseDeleted;
+      console.log(`[Google Sync] Firebase重複削除: ${firebaseDeleted}件の重複を削除しました`);
+    }
+  } catch (error) {
+    console.error('[Google Sync] Firebase重複削除エラー:', error);
+  }
+
+  return { created, updated, deleted };
 }
 
 function normalizeGoogleEvent(googleEvent = {}, ranges) {
@@ -583,7 +1152,8 @@ function normalizeForCompare(value, key) {
 }
 
 // イベントを追加（combiと同じロジック）
-function addEvent(event) {
+async function addEvent(event, options = {}) {
+  const { syncGoogle = true } = options;
   const normalizedStart = normalizeEventDateTimeString(event.startTime);
   const normalizedEnd = normalizeEventDateTimeString(event.endTime);
   const newEvent = {
@@ -609,13 +1179,26 @@ function addEvent(event) {
   }
 
   try {
-  const eventsRef = window.firebase.ref(window.firebase.db, "events");
-  const newEventRef = window.firebase.push(eventsRef);
-  // DBにはidフィールドを書き込まない（キーと競合させない）
-  const { id: _omitId, ...payload } = newEvent;
-  window.firebase.set(newEventRef, payload);
-  console.log('Firebaseにイベントを追加:', newEventRef.key);
-  return newEventRef.key;
+    const eventsRef = window.firebase.ref(window.firebase.db, "events");
+    const newEventRef = window.firebase.push(eventsRef);
+    const { id: _omitId, ...payload } = newEvent;
+    await window.firebase.set(newEventRef, payload);
+    const newId = newEventRef.key;
+    console.log('Firebaseにイベントを追加:', newId);
+
+    if (syncGoogle && newId && newEvent.isTimetable !== true) {
+      try {
+        await mirrorMutationsToGoogle({
+          upserts: [{ ...newEvent, id: newId }],
+          silent: true,
+        });
+      } catch (error) {
+        await window.firebase.remove(newEventRef).catch(() => {});
+        throw error;
+      }
+    }
+
+    return newId;
   } catch (error) {
     console.error('Firebaseにイベントを追加できませんでした。', error);
     showMessage('イベントを保存できませんでした。ネットワークやFirebase設定を確認してください。', 'error', 6000);
@@ -624,7 +1207,8 @@ function addEvent(event) {
 }
 
 // イベントを更新（combiと同じロジック）
-function updateEvent(id, event) {
+async function updateEvent(id, event, options = {}) {
+  const { syncGoogle = true } = options;
   const existingEvent = (Array.isArray(events) ? events.find(e => e.id === id) : null) || {};
   const startSource = event.startTime ?? existingEvent.startTime ?? '';
   const endSource = event.endTime ?? existingEvent.endTime ?? '';
@@ -652,38 +1236,75 @@ function updateEvent(id, event) {
     const message = 'Firebaseが無効のため、イベントを更新できません。設定を確認してください。';
     console.error(message);
     showMessage(message, 'error', 6000);
-    return;
+    return false;
   }
 
-  try {
-  // Firebaseの場合、ローカルのevents配列は更新しない
-  // Firebaseのリアルタイムリスナーが自動的に更新する
   const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
-  window.firebase.update(eventRef, updatedEvent);
-  console.log('Firebaseでイベントを更新:', id);
+  try {
+    await window.firebase.update(eventRef, updatedEvent);
+    console.log('Firebaseでイベントを更新:', id);
   } catch (error) {
     console.error('Firebaseでイベントの更新に失敗しました。', error);
     showMessage('イベントの更新に失敗しました。ネットワーク状況を確認してください。', 'error', 6000);
+    return false;
   }
+
+  if (syncGoogle && updatedEvent.isTimetable !== true) {
+    try {
+      await mirrorMutationsToGoogle({
+        upserts: [{ ...updatedEvent, id }],
+        silent: true,
+      });
+    } catch (error) {
+      if (existingEvent && existingEvent.id) {
+        const { id: _omitId, ...payload } = existingEvent;
+        await window.firebase.set(eventRef, payload).catch(() => {});
+      }
+      throw error;
+    }
+  }
+
+  return true;
 }
 
 // イベントを削除（combiと同じロジック）
-function deleteEvent(id) {
+async function deleteEvent(id, options = {}) {
+  const { syncGoogle = true } = options;
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、イベントを削除できません。設定を確認してください。';
     console.error(message);
     showMessage(message, 'error', 6000);
-    return;
+    return false;
   }
 
-  try {
+  const existingEvent = Array.isArray(events) ? events.find(e => e.id === id) : null;
   const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
-  window.firebase.remove(eventRef);
-  console.log('Firebaseからイベントを削除:', id);
+
+  try {
+    await window.firebase.remove(eventRef);
+    console.log('Firebaseからイベントを削除:', id);
   } catch (error) {
     console.error('Firebaseからイベントを削除できませんでした。', error);
     showMessage('イベントの削除に失敗しました。再度お試しください。', 'error', 6000);
+    return false;
   }
+
+  if (syncGoogle && existingEvent?.isTimetable !== true) {
+    try {
+      await mirrorMutationsToGoogle({
+        deletes: [id],
+        silent: true,
+      });
+    } catch (error) {
+      if (existingEvent) {
+        const { id: _omitId, ...payload } = existingEvent;
+        await window.firebase.set(eventRef, payload).catch(() => {});
+      }
+      throw error;
+    }
+  }
+
+  return true;
 }
 
 async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
@@ -691,6 +1312,10 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
     const confirmed = await showConfirmModal('全ての予定と時間割データを削除します。よろしいですか？', '削除の確認');
     if (!confirmed) return false;
   }
+
+  const deletableIds = Array.isArray(events)
+    ? events.filter(ev => ev?.id && ev.isTimetable !== true).map(ev => ev.id)
+    : [];
 
   try {
     if (!silent) {
@@ -705,6 +1330,14 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
     events = [];
     updateViews();
     clearScheduledNotifications();
+
+    if (deletableIds.length > 0) {
+      try {
+        await mirrorMutationsToGoogle({ deletes: deletableIds, silent: true });
+      } catch (error) {
+        console.error('Googleカレンダーからの一括削除に失敗しました。', error);
+      }
+    }
 
     if (!silent) {
       hideLoading();
@@ -738,13 +1371,15 @@ function startAutomaticGoogleSync() {
     stopAutomaticGoogleSync();
   }
 
-  const syncTask = async () => {
+  const syncTask = async (triggerSource = 'interval') => {
     if (!isFirebaseEnabled) return;
     if (googleSyncInFlight) return;
     googleSyncInFlight = true;
     try {
+      console.log(`[Google Sync] Auto sync start (${triggerSource}) at ${new Date().toISOString()}`);
       await fetchGoogleCalendarEvents({ silent: true });
       await syncEventsToGoogleCalendar({ silent: true });
+      console.log(`[Google Sync] Auto sync done (${triggerSource}) at ${new Date().toISOString()}`);
     } catch (error) {
       console.error('自動Googleカレンダー同期に失敗しました。', error);
     } finally {
@@ -752,11 +1387,12 @@ function startAutomaticGoogleSync() {
     }
   };
 
+  console.log(`[Google Sync] Initial auto sync scheduled in ${INITIAL_GOOGLE_SYNC_DELAY_MS / 1000}s`);
   googleSyncTimeoutId = setTimeout(async () => {
     googleSyncTimeoutId = null;
-    await syncTask();
+    await syncTask('initial-delay');
   }, INITIAL_GOOGLE_SYNC_DELAY_MS);
-  googleSyncIntervalId = setInterval(syncTask, GOOGLE_SYNC_INTERVAL_MS);
+  googleSyncIntervalId = setInterval(() => syncTask('interval'), GOOGLE_SYNC_INTERVAL_MS);
 }
 
 function stopAutomaticGoogleSync() {
@@ -852,10 +1488,7 @@ function renderDayView() {
       const safeBTime = Number.isNaN(bTime) ? 0 : bTime;
       return safeATime - safeBTime;
     });
-    sortedAllDay.forEach(event => {
-      const chip = createEventElement(event, { variant: 'all-day' });
-      allDayContainer.appendChild(chip);
-    });
+    syncEventElements(allDayContainer, sortedAllDay, viewCaches.day.allDay, { variant: 'all-day' });
   }
   
   const sortedTimed = [...timedEvents].sort((a, b) => {
@@ -866,21 +1499,18 @@ function renderDayView() {
     return safeATime - safeBTime;
   });
   const groups = calculateEventGroups(sortedTimed);
-
+  const groupMap = new Map();
   sortedTimed.forEach((event, index) => {
-    const eventElement = createEventElement(event);
-    positionEventInDayView(eventElement, event);
-    const groupInfo = groups[index];
-    if (groupInfo && groupInfo.totalInGroup > 1) {
-      const widthPercent = 100 / groupInfo.totalInGroup;
-      const leftPercent = widthPercent * groupInfo.indexInGroup;
-      eventElement.style.left = `${leftPercent}%`;
-      eventElement.style.right = `${100 - (leftPercent + widthPercent)}%`;
-    }
-    container.appendChild(eventElement);
+    groupMap.set(event.id, groups[index]);
   });
 
-  // 生成後にリサイズハンドラを付与
+  syncEventElements(container, sortedTimed, viewCaches.day.timed, {
+    positionEvent: (element, event) => {
+      positionEventInDayView(element, event);
+      applyOverlapStyles(element, groupMap.get(event.id));
+    },
+  });
+
   attachResizeHandlers();
 }
 
@@ -912,15 +1542,20 @@ function renderWeekView() {
     }
     
     // イベント表示
-    if (!eventsContainer) continue;
+    if (!eventsContainer) {
+      console.warn(`Week day container not found for day ${i}`);
+      continue;
+    }
+    
+    // コンテナをクリア
     eventsContainer.innerHTML = '';
     if (allDayColumn) {
       allDayColumn.innerHTML = '';
     }
+    
     const dayEvents = getEventsByDate(dayDate);
     const { allDayEvents, timedEvents } = splitEventsByAllDay(dayEvents);
     
-    // 重なり検出とグループ化
     if (allDayColumn) {
       const sortedAllDay = [...allDayEvents].sort((a, b) => {
         const aTime = new Date(a.startTime || 0).getTime();
@@ -929,10 +1564,7 @@ function renderWeekView() {
         const safeBTime = Number.isNaN(bTime) ? 0 : bTime;
         return safeATime - safeBTime;
       });
-      sortedAllDay.forEach((event) => {
-        const chip = createEventElement(event, { variant: 'all-day' });
-        allDayColumn.appendChild(chip);
-      });
+      syncEventElements(allDayColumn, sortedAllDay, viewCaches.week.allDay[i], { variant: 'all-day' });
     }
 
     const sortedTimed = [...timedEvents].sort((a, b) => {
@@ -943,24 +1575,21 @@ function renderWeekView() {
       return safeATime - safeBTime;
     });
     const groups = calculateEventGroups(sortedTimed);
-    
+    const groupMap = new Map();
     sortedTimed.forEach((event, index) => {
-      const eventElement = createEventElement(event);
-      // 週次でも日次と同じ計算で時間軸に配置
-      positionEventInDayView(eventElement, event);
-      
-      // 重なり情報を適用（横並び等分）
-      const groupInfo = groups[index];
-      if (groupInfo && groupInfo.totalInGroup > 1) {
-        const widthPercent = 100 / groupInfo.totalInGroup;
-        const leftPercent = widthPercent * groupInfo.indexInGroup;
-        eventElement.style.left = `${leftPercent}%`;
-        eventElement.style.right = `${100 - (leftPercent + widthPercent)}%`;
-      }
-      
-      eventsContainer.appendChild(eventElement);
+      groupMap.set(event.id, groups[index]);
+    });
+    
+    syncEventElements(eventsContainer, sortedTimed, viewCaches.week.timed[i], {
+      positionEvent: (element, event) => {
+        positionEventInDayView(element, event);
+        applyOverlapStyles(element, groupMap.get(event.id));
+      },
     });
   }
+  
+  // リサイズハンドラーをアタッチ
+  attachResizeHandlers();
 }
 
 // イベント重なり検出とグループ化（同時間帯を横並び等分表示用）
@@ -996,62 +1625,141 @@ function calculateEventGroups(dayEvents) {
   return groups;
 }
 
-// イベント要素を作成（日次ビュー用）
-function createEventElement(event, options = {}) {
+function getEventRenderSignature(event, { variant } = {}) {
+  return [
+    event.id || '',
+    event.title || '',
+    event.description || '',
+    event.startTime || '',
+    event.endTime || '',
+    event.color || '',
+    event.allDay === true ? '1' : '0',
+    event.isTimetable === true ? '1' : '0',
+    event.reminderMinutes ?? '',
+    variant || '',
+  ].join('|');
+}
+
+function populateEventElement(element, event, options = {}) {
   const { variant } = options;
   const isAllDay = variant === 'all-day' || isAllDayEvent(event);
-  const div = document.createElement('div');
-  div.className = 'event-item';
-  if (isAllDay) {
-    div.classList.add('all-day');
-  }
+  element.className = 'event-item';
+  if (isAllDay) element.classList.add('all-day');
+  if (event.isTimetable === true) element.classList.add('timetable-event');
+  element.style.backgroundColor = event.color || '#3b82f6';
+  element.dataset.eventId = event.id;
   if (event.isTimetable === true) {
-    div.classList.add('timetable-event');
-  }
-  div.style.backgroundColor = event.color || '#3b82f6';
-  div.dataset.eventId = event.id;
-  if (event.isTimetable === true) {
-    div.dataset.isTimetable = 'true';
+    element.dataset.isTimetable = 'true';
+  } else {
+    delete element.dataset.isTimetable;
   }
   if (isAllDay) {
-    div.dataset.allDay = 'true';
+    element.dataset.allDay = 'true';
+  } else {
+    delete element.dataset.allDay;
   }
-  div.tabIndex = 0;
-  div.setAttribute('role', 'button');
+  element.tabIndex = 0;
+  element.setAttribute('role', 'button');
   const fullTitle = event.title || '(無題)';
-  const title = escapeHtml(fullTitle);
-  // 週次/日次ビューでは最大30文字に切り詰め（CSSのellipsisも適用される）
   const displayTitle = truncateText(fullTitle, 30);
 
   if (isAllDay) {
-    div.setAttribute('aria-label', `${fullTitle} (終日)`);
-    div.innerHTML = `
+    element.setAttribute('aria-label', `${fullTitle} (終日)`);
+    element.innerHTML = `
       <div class="event-title">${escapeHtml(displayTitle)}</div>
     `;
   } else {
     const startLabel = event.startTime ? formatTime(event.startTime) : '--:--';
     const endLabel = event.endTime ? formatTime(event.endTime) : '--:--';
-    div.setAttribute('aria-label', `${fullTitle}, ${startLabel}から${endLabel}`);
-    div.innerHTML = `
+    element.setAttribute('aria-label', `${fullTitle}, ${startLabel}から${endLabel}`);
+    element.innerHTML = `
       <div class="resize-handle top"></div>
       <div class="event-title">${escapeHtml(displayTitle)}</div>
       <div class="event-time">${startLabel} - ${endLabel}</div>
       <div class="resize-handle bottom"></div>
     `;
   }
-  
-  div.addEventListener('click', (e) => {
+
+  delete element.dataset.resizeBound;
+  element.dataset.renderSignature = getEventRenderSignature(event, { variant });
+}
+
+function bindEventElementInteractions(element) {
+  if (element.dataset.interactionBound === 'true') return;
+  element.dataset.interactionBound = 'true';
+  element.addEventListener('click', (e) => {
     e.stopPropagation();
-    showEventModal(event.id);
+    const id = element.dataset.eventId;
+    if (id) showEventModal(id);
   });
-  div.addEventListener('keypress', (e) => {
+  element.addEventListener('keypress', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      showEventModal(event.id);
+      const id = element.dataset.eventId;
+      if (id) showEventModal(id);
     }
   });
-  
+}
+
+function createEventElement(event, options = {}) {
+  const div = document.createElement('div');
+  populateEventElement(div, event, options);
+  bindEventElementInteractions(div);
   return div;
+}
+
+function applyOverlapStyles(element, groupInfo) {
+  if (!element) return;
+  if (!groupInfo || groupInfo.totalInGroup <= 1) {
+    element.style.left = '';
+    element.style.right = '';
+    return;
+  }
+  const widthPercent = 100 / groupInfo.totalInGroup;
+  const leftPercent = widthPercent * groupInfo.indexInGroup;
+  element.style.left = `${leftPercent}%`;
+  element.style.right = `${100 - (leftPercent + widthPercent)}%`;
+}
+
+function syncEventElements(container, events, cacheMap, { variant, positionEvent, positionContext } = {}) {
+  if (!container || !Array.isArray(events)) return;
+  const processedIds = new Set();
+
+  events.forEach((event, index) => {
+    if (!event?.id) return;
+    const signature = getEventRenderSignature(event, { variant });
+    const cached = cacheMap.get(event.id);
+    let element = cached?.element;
+    if (!element) {
+      element = createEventElement(event, { variant });
+      cacheMap.set(event.id, { element, signature });
+    } else if (cached.signature !== signature) {
+      populateEventElement(element, event, { variant });
+      cacheMap.set(event.id, { element, signature });
+    } else {
+      element.dataset.eventId = event.id;
+    }
+
+    if (typeof positionEvent === 'function') {
+      positionEvent(element, event, positionContext);
+    }
+
+    const referenceNode = container.children[index];
+    if (referenceNode !== element) {
+      container.insertBefore(element, referenceNode || null);
+    }
+    processedIds.add(event.id);
+  });
+
+  Array.from(cacheMap.entries()).forEach(([id, info]) => {
+    if (!processedIds.has(id)) {
+      const element = info?.element;
+      if (element && element.parentElement === container) {
+        container.removeChild(element);
+      }
+      cacheMap.delete(id);
+    }
+  });
 }
 
 // 日次ビューでのイベント配置
@@ -1078,6 +1786,14 @@ function positionEventInDayView(element, event) {
     return;
   }
   
+  // 時間スロットの実際の高さを取得
+  const hourHeight = getHourHeight();
+  
+  // タイトルだけを表示するための最低高さ（1時間分の高さの約30%）
+  const MIN_HEIGHT_TITLE_ONLY = hourHeight * 0.3;
+  // タイトルと時間の両方を表示するための最低高さ（1.5時間分）
+  const MIN_HEIGHT_FOR_TIME = hourHeight * 1.5;
+  
   const startMinutesTotal = startTime.getHours() * 60 + startTime.getMinutes();
   const endMinutesTotal = endTime.getHours() * 60 + endTime.getMinutes();
   const visibleStartMinutes = VISIBLE_START_HOUR * 60;
@@ -1086,11 +1802,22 @@ function positionEventInDayView(element, event) {
   const startMinutesFromVisible = Math.max(0, startMinutesTotal - visibleStartMinutes);
   const endMinutesFromVisible = Math.max(startMinutesFromVisible + 15, Math.min(visibleEndMinutes - visibleStartMinutes, endMinutesTotal - visibleStartMinutes));
 
-  const top = (startMinutesFromVisible / 60) * HOUR_HEIGHT_PX;
-  const height = Math.max(MIN_EVENT_HEIGHT_PX, (endMinutesFromVisible - startMinutesFromVisible) / 60 * HOUR_HEIGHT_PX);
+  const top = (startMinutesFromVisible / 60) * hourHeight;
+  const calculatedHeight = (endMinutesFromVisible - startMinutesFromVisible) / 60 * hourHeight;
+  const height = Math.max(MIN_HEIGHT_TITLE_ONLY, calculatedHeight);
 
   element.style.top = `${top}px`;
   element.style.height = `${height}px`;
+  
+  // 高さが最低高さ以下の場合は時間要素を非表示
+  const timeElement = element.querySelector('.event-time');
+  if (timeElement) {
+    if (calculatedHeight < MIN_HEIGHT_FOR_TIME) {
+      timeElement.style.display = 'none';
+    } else {
+      timeElement.style.display = '';
+    }
+  }
 }
 
 // モーダル表示
@@ -1268,8 +1995,6 @@ function showEventModal(eventId = null) {
     modal.classList.add('show');
     modal.setAttribute('aria-hidden', 'false');
   }
-  const titleInput = safeGetElementById('eventTitle');
-  if (titleInput) titleInput.focus();
 }
 
 // モーダルを閉じる
@@ -1387,14 +2112,23 @@ function createMonthDayElement(date, currentMonth) {
     const eventsContainer = document.createElement('div');
     eventsContainer.className = 'month-day-events';
     
-    // 最大3件まで表示（色ドット + 時刻 + タイトル）
+    // 最大3件まで表示（背景色 + 時刻 + タイトル）
     visibleEvents.slice(0, 3).forEach(event => {
       const eventElement = document.createElement('div');
       eventElement.className = 'month-event-item';
-
-      const dot = document.createElement('span');
-      dot.className = 'month-event-dot';
-      dot.style.backgroundColor = event.color || '#3b82f6';
+      
+      // イベントの色を背景色として使用
+      const eventColor = event.color || '#3b82f6';
+      eventElement.style.backgroundColor = eventColor;
+      
+      // 背景色に応じて文字色を調整（明るい色の場合は暗い文字、暗い色の場合は明るい文字）
+      const rgb = hexToRgb(eventColor);
+      if (rgb) {
+        const brightness = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
+        eventElement.style.color = brightness > 128 ? '#1f2937' : '#ffffff';
+      } else {
+        eventElement.style.color = '#1f2937';
+      }
 
       const time = document.createElement('span');
       time.className = 'month-event-time';
@@ -1406,7 +2140,6 @@ function createMonthDayElement(date, currentMonth) {
       // 月次ビューでは短く表示（最大15文字）
       title.textContent = truncateText(event.title || '', 15);
 
-      eventElement.appendChild(dot);
       if (!time.classList.contains('hidden')) {
         eventElement.appendChild(time);
       }
@@ -1532,8 +2265,11 @@ function toDateTimeLocalValue(value) {
 function formatDateOnly(value) {
   if (!value) return '';
   if (typeof value === 'string') {
-    const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (match) return match[1];
+    // 日付のみ（YYYY-MM-DD）の場合はそのまま返す
+    if (!value.includes('T')) {
+      const match = value.match(/^(\d{4}-\d{2}-\d{2})$/);
+      if (match) return match[1];
+    }
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -1707,31 +2443,35 @@ function exportEventsAsJSON(range = 'all') {
   }
 }
 
-function importEventsFromJSONData(obj) {
-      if (!obj || !Array.isArray(obj.events)) throw new Error('フォーマット不正');
+async function importEventsFromJSONData(obj) {
+  if (!obj || !Array.isArray(obj.events)) throw new Error('フォーマット不正');
   let importedCount = 0;
-      obj.events.forEach(ev => {
-        const dup = Array.isArray(events) ? events.find(e => e.startTime === ev.startTime && (e.title || '') === (ev.title || '')) : null;
-        if (dup) return;
-        const toAdd = {
-          title: ev.title || '',
-          description: ev.description || '',
-          startTime: ev.startTime,
-          endTime: ev.endTime,
+  for (const ev of obj.events) {
+    const dup = Array.isArray(events)
+      ? events.find(e => e.startTime === ev.startTime && (e.title || '') === (ev.title || ''))
+      : null;
+    if (dup) continue;
+    const toAdd = {
+      title: ev.title || '',
+      description: ev.description || '',
+      startTime: ev.startTime,
+      endTime: ev.endTime,
       allDay: ev.allDay === true,
-          color: ev.color || '#3b82f6',
-          recurrence: ev.recurrence || 'none',
-          recurrenceEnd: ev.recurrenceEnd || '',
-      reminderMinutes: (ev.reminderMinutes ?? null),
-      isTimetable: ev.isTimetable === true
-        };
-        addEvent(toAdd);
-    importedCount++;
-  });
+      color: ev.color || '#3b82f6',
+      recurrence: ev.recurrence || 'none',
+      recurrenceEnd: ev.recurrenceEnd || '',
+      reminderMinutes: ev.reminderMinutes ?? null,
+      isTimetable: ev.isTimetable === true,
+    };
+    const newId = await addEvent(toAdd);
+    if (newId) {
+      importedCount++;
+    }
+  }
   return importedCount;
 }
 
-function handleJSONImport(jsonData) {
+async function handleJSONImport(jsonData) {
   if (!jsonData || typeof jsonData !== 'object') {
     throw new Error('JSONデータが不正です');
   }
@@ -1743,12 +2483,12 @@ function handleJSONImport(jsonData) {
     (jsonData.schedule && jsonData.periodTimes && Array.isArray(jsonData.periodTimes));
   
   if (!Array.isArray(jsonData) && isTimetable) {
-    const count = importTimetableFromData(jsonData);
+    const count = await importTimetableFromData(jsonData);
     showMessage(`時間割をインポートしました: ${count}件の予定を追加`, 'success');
     return;
   }
   if (Array.isArray(jsonData.events)) {
-    const count = importEventsFromJSONData(jsonData);
+    const count = await importEventsFromJSONData(jsonData);
     showMessage(`イベントをインポートしました: ${count}件`, 'success');
     return;
   }
@@ -1756,7 +2496,7 @@ function handleJSONImport(jsonData) {
 }
 
 // 時間割データを取り込む
-function importTimetableFromData(data) {
+async function importTimetableFromData(data) {
   if (!data || typeof data !== 'object') {
     throw new Error('時間割データが不正です');
   }
@@ -1831,7 +2571,7 @@ function importTimetableFromData(data) {
 
     let importedCount = 0;
 
-    uniqueDates.forEach((dateStr) => {
+    for (const dateStr of uniqueDates) {
       const config = dayConfigMap.get(dateStr);
       const eventAllDay = config.allDay === true;
       let startTime;
@@ -1877,9 +2617,11 @@ function importTimetableFromData(data) {
         isTimetable: true,
       };
 
-      addEvent(newEvent);
-      importedCount++;
-    });
+      const newId = await addEvent(newEvent);
+      if (newId) {
+        importedCount++;
+      }
+    }
 
     return importedCount;
   }
@@ -1901,23 +2643,23 @@ function importTimetableFromData(data) {
 
   if (scheduleByWeekday && periodTimes.length > 0) {
     const periodMap = new Map(periodTimes.map((p, idx) => [idx + 1, p]));
-    weekdays.forEach((weekdaySymbol) => {
+    for (const weekdaySymbol of weekdays) {
       const classDates = Array.isArray(classDaysByWeekday[weekdaySymbol])
         ? classDaysByWeekday[weekdaySymbol]
         : [];
       const periodsForDay = Array.isArray(scheduleByWeekday[weekdaySymbol])
         ? scheduleByWeekday[weekdaySymbol].map(Number).filter((n) => Number.isFinite(n) && periodMap.has(n))
         : [];
-      if (periodsForDay.length === 0) return;
+      if (periodsForDay.length === 0) continue;
 
       const minPeriod = Math.min(...periodsForDay);
       const maxPeriod = Math.max(...periodsForDay);
       const startPeriodTime = periodMap.get(minPeriod);
       const endPeriodTime = periodMap.get(maxPeriod);
-      if (!startPeriodTime || !startPeriodTime.start || !endPeriodTime || !endPeriodTime.end) return;
+      if (!startPeriodTime || !startPeriodTime.start || !endPeriodTime || !endPeriodTime.end) continue;
 
-      classDates.forEach((classDate) => {
-        if (typeof classDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(classDate)) return;
+      for (const classDate of classDates) {
+        if (typeof classDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(classDate)) continue;
         const startTime = `${classDate}T${startPeriodTime.start}`;
         const endTime = `${classDate}T${endPeriodTime.end}`;
 
@@ -1927,7 +2669,7 @@ function importTimetableFromData(data) {
           (e.title || '') === title &&
           e.isTimetable === true
         ) : null;
-        if (duplicate) return;
+        if (duplicate) continue;
 
         const newEvent = {
           title,
@@ -1942,28 +2684,31 @@ function importTimetableFromData(data) {
           isTimetable: true,
         };
 
-        addEvent(newEvent);
-        importedCount++;
-      });
-    });
+        const newId = await addEvent(newEvent);
+        if (newId) {
+          importedCount++;
+        }
+      }
+    }
     return importedCount;
   }
 
-  weekdays.forEach((weekdaySymbol, weekdayIndex) => {
+  for (const [weekdayIndex, weekdaySymbol] of weekdays.entries()) {
     const classDates = Array.isArray(classDaysByWeekday[weekdaySymbol])
       ? classDaysByWeekday[weekdaySymbol]
       : [];
 
-    classDates.forEach((classDate) => {
-      if (!classDate || typeof classDate !== 'string') return;
+    for (const classDate of classDates) {
+      if (!classDate || typeof classDate !== 'string') continue;
 
-      timetableGrid.forEach((subjectsForPeriod, periodIndex) => {
+      for (let periodIndex = 0; periodIndex < timetableGrid.length; periodIndex += 1) {
+        const subjectsForPeriod = timetableGrid[periodIndex];
         const subjectEntry = subjectsForPeriod?.[weekdayIndex];
         const subjectName = typeof subjectEntry === 'object' ? subjectEntry.title : subjectEntry;
-        if (!subjectName || subjectName.trim() === '') return;
+        if (!subjectName || subjectName.trim() === '') continue;
 
         const periodTime = periodTimes[periodIndex];
-        if (!periodTime || !periodTime.start || !periodTime.end) return;
+        if (!periodTime || !periodTime.start || !periodTime.end) continue;
 
         const startTime = `${classDate}T${periodTime.start}`;
         const endTime = `${classDate}T${periodTime.end}`;
@@ -1976,7 +2721,7 @@ function importTimetableFromData(data) {
           (e.description || '').includes(descriptionLabel) &&
           e.isTimetable === true
         ) : null;
-        if (duplicate) return;
+        if (duplicate) continue;
 
         const newEvent = {
           title: subjectName,
@@ -1990,11 +2735,13 @@ function importTimetableFromData(data) {
           isTimetable: true
         };
 
-        addEvent(newEvent);
-        importedCount++;
-      });
-    });
-  });
+        const newId = await addEvent(newEvent);
+        if (newId) {
+          importedCount++;
+        }
+      }
+    }
+  }
 
   return importedCount;
 }
@@ -2251,52 +2998,6 @@ function setupEventListeners() {
     });
   }
   
-  // 予定追加ボタン
-  const addEventBtn = safeGetElementById('addEventBtn');
-  if (addEventBtn) {
-    addEventBtn.addEventListener('click', () => {
-      showEventModal();
-    });
-  }
-  // インポート/エクスポート
-  const importBtn = safeGetElementById('importBtn');
-  const exportBtn = safeGetElementById('exportBtn');
-  const importFile = safeGetElementById('importFile');
-  if (importBtn && exportBtn && importFile) {
-    importBtn.addEventListener('click', () => importFile.click());
-    importFile.addEventListener('change', (e) => {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      if (file.name.endsWith('.json')) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          try {
-            if (!reader.result || typeof reader.result !== 'string') {
-              throw new Error('ファイルの内容が読み取れませんでした');
-            }
-            const jsonData = JSON.parse(reader.result);
-            handleJSONImport(jsonData);
-          } catch (error) {
-            console.error('インポートエラー:', error);
-            showMessage('インポートに失敗しました。詳細はコンソールを確認してください。', 'error', 6000);
-          }
-        };
-        reader.onerror = () => {
-          const errorMsg = reader.error ? reader.error.message || String(reader.error) : '不明なエラー';
-          console.error('ファイル読み込みに失敗しました:', errorMsg);
-          showMessage('ファイルの読み込みに失敗しました。', 'error', 6000);
-        };
-        reader.readAsText(file);
-      } else {
-        const message = '現時点ではJSONファイルのみ対応しています。';
-        console.warn(message);
-        showMessage(message, 'error', 4000);
-      }
-      importFile.value = '';
-    });
-    exportBtn.addEventListener('click', () => exportEventsAsJSON('all'));
-  }
-  
   const startInput = safeGetElementById('eventStartTime');
   const endInput = safeGetElementById('eventEndTime');
   const allDayCheckbox = safeGetElementById('eventAllDay');
@@ -2372,11 +3073,6 @@ function setupEventListeners() {
   const closeModalBtn = safeGetElementById('closeModal');
   if (closeModalBtn) {
     closeModalBtn.addEventListener('click', closeEventModal);
-  }
-  
-  const cancelBtn = safeGetElementById('cancelBtn');
-  if (cancelBtn) {
-    cancelBtn.addEventListener('click', closeEventModal);
   }
   
   // モーダル外クリックで閉じる
@@ -2490,7 +3186,7 @@ function setupEventListeners() {
         };
         
         // Firebaseに保存（成功後にローカル配列を更新）
-        const newId = addEvent(newEvent);
+        const newId = await addEvent(newEvent);
         if (newId && !isFirebaseEnabled) {
           // Firebaseが無効な場合のみローカル配列に追加
           newEvent.id = newId;
@@ -2499,7 +3195,7 @@ function setupEventListeners() {
       } else if (editingEventId) {
         // 既存イベントを更新
         // Firebase更新を先に実行し、成功後にローカル配列を更新
-        updateEvent(editingEventId, event);
+        await updateEvent(editingEventId, event);
         // ローカル配列も更新（Firebaseのリアルタイム更新で上書きされる可能性があるが、即座のUI更新のため）
         if (Array.isArray(events)) {
           const eventIndex = events.findIndex(e => e.id === editingEventId);
@@ -2521,7 +3217,7 @@ function setupEventListeners() {
         }
       } else {
         // 新規イベントを作成
-        const newId = addEvent(event);
+        const newId = await addEvent(event);
         if (newId && !isFirebaseEnabled) {
           // Firebaseが無効な場合のみローカル配列に追加
           const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
@@ -2552,7 +3248,7 @@ function setupEventListeners() {
       if (confirmed) {
         try {
           showLoading('削除中...');
-          deleteEvent(editingEventId);
+          await deleteEvent(editingEventId);
           hideLoading();
           closeEventModal();
           showMessage('予定を削除しました', 'success', 3000);
@@ -2654,8 +3350,10 @@ function enableDayGridClickToCreate() {
     selectionPreview = null;
 
     // 15分単位に丸める
-    const minutesFromTopStart = Math.max(0, Math.round(startY / HOUR_HEIGHT_PX * 60 / 15) * 15);
-    const minutesFromTopEnd = Math.max(0, Math.round(endY / HOUR_HEIGHT_PX * 60 / 15) * 15);
+    const hourHeight = getHourHeight();
+    const quarterHourHeight = hourHeight / 4; // 15分の高さ
+    const minutesFromTopStart = Math.max(0, Math.round(startY / hourHeight * 60 / 15) * 15);
+    const minutesFromTopEnd = Math.max(0, Math.round(endY / hourHeight * 60 / 15) * 15);
     
     const baseDate = new Date(currentDate);
     baseDate.setHours(0, 0, 0, 0);
@@ -2665,7 +3363,7 @@ function enableDayGridClickToCreate() {
     
     // クリック（移動なし）の場合は2時間の予定を作成
     let end;
-    if (!hasMoved || (endY - startY) < 6.25) { // 6.25px = 15分
+    if (!hasMoved || (endY - startY) < quarterHourHeight) { // 15分未満の移動はクリックとみなす
       end = new Date(start.getTime() + 2 * 60 * 60 * 1000); // 2時間
     } else {
       const clampedEndTotalMinutes = Math.max(startTotalMinutes + 15, Math.min(endTotalMinutes, (VISIBLE_END_HOUR + 1) * 60));
@@ -2695,10 +3393,8 @@ function enableDayGridClickToCreate() {
     showEventModal(tempEventId);
     const startTimeInput = safeGetElementById('eventStartTime');
     const endTimeInput = safeGetElementById('eventEndTime');
-    const titleInput = safeGetElementById('eventTitle');
     if (startTimeInput) startTimeInput.value = formatDateTimeLocal(start);
     if (endTimeInput) endTimeInput.value = formatDateTimeLocal(end);
-    if (titleInput) titleInput.focus();
   }
 }
 
@@ -2719,8 +3415,6 @@ function openAllDayCreateModal(date) {
   });
   if (allDayStartInput) allDayStartInput.value = isoDate;
   if (allDayEndInput) allDayEndInput.value = isoDate;
-  const titleInput = safeGetElementById('eventTitle');
-  if (titleInput) titleInput.focus();
 }
 
 // 週次グリッドでのクリック作成（クリック位置の時間で1時間の予定をモーダルで作成）
@@ -2734,8 +3428,9 @@ function enableWeekGridClickToCreate() {
       const rect = container.getBoundingClientRect();
       const offsetY = e.clientY - rect.top + container.scrollTop;
       
-      // 15分単位に丸める（1時間 = HOUR_HEIGHT_PX）
-      const minutesFromTop = Math.max(0, Math.round(offsetY / HOUR_HEIGHT_PX * 60 / 15) * 15);
+      // 15分単位に丸める
+      const hourHeight = getHourHeight();
+      const minutesFromTop = Math.max(0, Math.round(offsetY / hourHeight * 60 / 15) * 15);
       const totalStartMinutes = VISIBLE_START_HOUR * 60 + minutesFromTop;
       const totalEndMinutes = Math.min(totalStartMinutes + 60, (VISIBLE_END_HOUR + 1) * 60);
       const referenceWeekStart = getWeekStart(currentDate);
@@ -2750,10 +3445,8 @@ function enableWeekGridClickToCreate() {
       showEventModal();
       const startTimeInput = safeGetElementById('eventStartTime');
       const endTimeInput = safeGetElementById('eventEndTime');
-      const titleInput = safeGetElementById('eventTitle');
       if (startTimeInput) startTimeInput.value = formatDateTimeLocal(start);
       if (endTimeInput) endTimeInput.value = formatDateTimeLocal(end);
-      if (titleInput) titleInput.focus();
     });
   });
 }
@@ -2763,6 +3456,10 @@ function attachResizeHandlers() {
   const items = document.querySelectorAll('.event-item');
   
   items.forEach((item) => {
+    if (item.dataset.resizeBound === 'true') {
+      return;
+    }
+    item.dataset.resizeBound = 'true';
     const id = item.dataset.eventId;
     const eventData = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
     const topHandle = item.querySelector('.resize-handle.top');
@@ -2870,8 +3567,9 @@ function attachResizeHandlers() {
     }
 
     function onMouseMove(e) {
+      const hourHeight = getHourHeight();
       const dy = e.clientY - startY;
-      const minutesDelta = Math.round(dy / 25 * 60 / 15) * 15; // 25px=1h, 15分単位に丸める
+      const minutesDelta = Math.round(dy / hourHeight * 60 / 15) * 15; // 15分単位に丸める
       
       if (resizing === 'top') {
         const newStart = new Date(originalStart.getTime() + minutesDelta * 60000);
@@ -2882,8 +3580,8 @@ function attachResizeHandlers() {
           const visibleStartMinutes = VISIBLE_START_HOUR * 60;
           const startMinutesFromVisible = Math.max(0, startMinutesTotal - visibleStartMinutes);
           const endMinutesFromVisible = Math.max(startMinutesFromVisible + 15, endMinutesTotal - visibleStartMinutes);
-          const top = (startMinutesFromVisible / 60) * HOUR_HEIGHT_PX;
-          const endTop = (endMinutesFromVisible / 60) * HOUR_HEIGHT_PX;
+          const top = (startMinutesFromVisible / 60) * hourHeight;
+          const endTop = (endMinutesFromVisible / 60) * hourHeight;
           item.style.top = `${top}px`;
           item.style.height = `${Math.max(endTop - top, MIN_EVENT_HEIGHT_PX)}px`;
         }
@@ -2896,8 +3594,8 @@ function attachResizeHandlers() {
           const visibleStartMinutes = VISIBLE_START_HOUR * 60;
           const startMinutesFromVisible = Math.max(0, startMinutesTotal - visibleStartMinutes);
           const endMinutesFromVisible = Math.max(startMinutesFromVisible + 15, endMinutesTotal - visibleStartMinutes);
-          const startTop = (startMinutesFromVisible / 60) * HOUR_HEIGHT_PX;
-          const endTop = (endMinutesFromVisible / 60) * HOUR_HEIGHT_PX;
+          const startTop = (startMinutesFromVisible / 60) * hourHeight;
+          const endTop = (endMinutesFromVisible / 60) * hourHeight;
           item.style.height = `${Math.max(endTop - startTop, MIN_EVENT_HEIGHT_PX)}px`;
         }
       } else if (resizing === 'move') {
@@ -2914,7 +3612,6 @@ function attachResizeHandlers() {
       if (!e.touches || e.touches.length === 0) return;
       const touch = e.touches[0];
       const dy = touch.clientY - startY;
-      const minutesDelta = Math.round(dy / 25 * 60 / 15) * 15; // 25px=1h, 15分単位に丸める
       
       if (resizing === 'move') {
         // ドラッグ移動のプレビュー
@@ -2925,12 +3622,13 @@ function attachResizeHandlers() {
       }
     }
 
-    function onMouseUp(e) {
+    async function onMouseUp(e) {
       document.removeEventListener('mousemove', onMouseMove);
       item.classList.remove('resizing', 'dragging');
 
+      const hourHeight = getHourHeight();
       const dy = e.clientY - startY;
-      const minutesDelta = Math.round(dy / 25 * 60 / 15) * 15; // 15分単位に丸める
+      const minutesDelta = Math.round(dy / hourHeight * 60 / 15) * 15; // 15分単位に丸める
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
@@ -2975,24 +3673,37 @@ function attachResizeHandlers() {
         }
       }
       
-      // Firebaseにのみ更新を送信（ローカル配列は変更しない）
-      updateEvent(id, {
-        title: ev.title,
-        description: ev.description || '',
-        startTime: newStartTime,
-        endTime: newEndTime,
-        color: ev.color
-      });
+      // 時間が変更されていない場合は更新しない
+      if (newStartTime === ev.startTime && newEndTime === ev.endTime) {
+        return;
+      }
+      
+      try {
+        showLoading('予定を更新中...');
+        await updateEvent(id, {
+          title: ev.title,
+          description: ev.description || '',
+          startTime: newStartTime,
+          endTime: newEndTime,
+          color: ev.color
+        });
+        hideLoading();
+      } catch (error) {
+        hideLoading();
+        console.error('イベント移動の同期に失敗しました', error);
+        showMessage('予定の更新に失敗しました。', 'error', 6000);
+      }
     }
 
-    function onTouchEnd(e) {
+    async function onTouchEnd(e) {
       document.removeEventListener('touchmove', onTouchMove);
       item.classList.remove('resizing', 'dragging');
 
       if (!e.changedTouches || e.changedTouches.length === 0) return;
+      const hourHeight = getHourHeight();
       const touch = e.changedTouches[0];
       const dy = touch.clientY - startY;
-      const minutesDelta = Math.round(dy / 25 * 60 / 15) * 15; // 15分単位に丸める
+      const minutesDelta = Math.round(dy / hourHeight * 60 / 15) * 15; // 15分単位に丸める
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
@@ -3020,14 +3731,26 @@ function attachResizeHandlers() {
         }
       }
       
-      // Firebaseにのみ更新を送信（ローカル配列は変更しない）
-      updateEvent(id, {
-        title: ev.title,
-        description: ev.description || '',
-        startTime: newStartTime,
-        endTime: newEndTime,
-        color: ev.color
-      });
+      // 時間が変更されていない場合は更新しない
+      if (newStartTime === ev.startTime && newEndTime === ev.endTime) {
+        return;
+      }
+      
+      try {
+        showLoading('予定を更新中...');
+        await updateEvent(id, {
+          title: ev.title,
+          description: ev.description || '',
+          startTime: newStartTime,
+          endTime: newEndTime,
+          color: ev.color
+        });
+        hideLoading();
+      } catch (error) {
+        hideLoading();
+        console.error('イベント移動の同期に失敗しました', error);
+        showMessage('予定の更新に失敗しました。', 'error', 6000);
+      }
     }
 
     // モバイルではリサイズハンドルのイベントリスナーを追加しない

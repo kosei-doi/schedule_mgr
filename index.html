@@ -16,6 +16,9 @@
             ref,
             set,
             onValue,
+            onChildAdded,
+            onChildChanged,
+            onChildRemoved,
             push,
             update,
             remove,
@@ -37,7 +40,7 @@
         const analytics = getAnalytics(app);
         const db = getDatabase(app);
 
-        window.firebase = { app, analytics, db, ref, set, onValue, push, update, remove, get };
+        window.firebase = { app, analytics, db, ref, set, onValue, onChildAdded, onChildChanged, onChildRemoved, push, update, remove, get };
         console.log('Firebase v11 initialized successfully');
     </script>
 
@@ -56,12 +59,6 @@
                     <button id="dayViewBtn" class="view-btn active">日次</button>
                     <button id="weekViewBtn" class="view-btn">週次</button>
                     <button id="monthViewBtn" class="view-btn">月次</button>
-                </div>
-                <div class="header-actions">
-                    <button id="addEventBtn" class="add-btn">+ 予定追加</button>
-                    <input id="importFile" type="file" accept=".json,.ics,text/calendar" style="display:none" />
-                    <button id="importBtn" class="today-btn">インポート</button>
-                    <button id="exportBtn" class="today-btn">エクスポート</button>
                 </div>
             </div>
         </header>
@@ -312,7 +309,6 @@
                     </div>
                     
                     <div class="form-actions">
-                        <button type="button" id="cancelBtn" class="btn btn-secondary">キャンセル</button>
                         <button type="submit" class="btn btn-primary">保存</button>
                         <button type="button" id="deleteBtn" class="btn btn-danger" style="display: none;">削除</button>
                     </div>

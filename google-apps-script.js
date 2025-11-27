@@ -16,14 +16,20 @@ function doPost(e) {
     }
 
     const payload = JSON.parse(e.postData.contents);
+    const action = (payload?.action || '').toLowerCase();
+    const calendarId = payload.calendarId || CALENDAR_ID;
+    const calendar = CalendarApp.getCalendarById(calendarId);
+    if (!calendar) {
+      throw new Error(`Calendar not found: ${calendarId}`);
+    }
+
+    if (action === 'mutations') {
+      return processMutations(calendar, payload);
+    }
+
     const events = Array.isArray(payload?.events) ? payload.events : [];
     if (events.length === 0) {
       return buildResponse({ success: true, message: 'No events to process.', created: 0, updated: 0, skipped: 0 });
-    }
-
-    const calendar = CalendarApp.getCalendarById(payload.calendarId || CALENDAR_ID);
-    if (!calendar) {
-      throw new Error(`Calendar not found: ${payload.calendarId || CALENDAR_ID}`);
     }
 
     const windowStart = new Date();
@@ -41,8 +47,6 @@ function doPost(e) {
     let created = 0;
     let updated = 0;
     let skipped = 0;
-    
-    // 初期化を確実にする（エラー時の安全性のため）
 
     events.forEach((eventPayload) => {
       const eventId = (eventPayload?.id || '').trim() || Utilities.getUuid();
@@ -91,6 +95,88 @@ function doPost(e) {
     console.error('Sync failed:', error);
     return buildResponse({ success: false, message: error.message || 'Sync failed.' }, 500);
   }
+}
+
+function processMutations(calendar, payload) {
+  const upserts = Array.isArray(payload?.upserts) ? payload.upserts : [];
+  const deletes = Array.isArray(payload?.deletes) ? payload.deletes : [];
+
+  const windowStart = new Date();
+  windowStart.setFullYear(windowStart.getFullYear() - 1);
+  windowStart.setMonth(0, 1);
+  windowStart.setHours(0, 0, 0, 0);
+
+  const windowEnd = new Date();
+  windowEnd.setFullYear(windowEnd.getFullYear() + 2);
+  windowEnd.setMonth(11, 31);
+  windowEnd.setHours(23, 59, 59, 999);
+
+  const existingEvents = calendar.getEvents(windowStart, windowEnd, { search: DESCRIPTION_TAG });
+  const existingMap = buildExistingMap(existingEvents);
+
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
+  let skipped = 0;
+
+  upserts.forEach((eventPayload) => {
+    const eventId = (eventPayload?.id || '').trim();
+    const start = eventPayload?.startDateTime ? new Date(eventPayload.startDateTime) : null;
+    const end = eventPayload?.endDateTime ? new Date(eventPayload.endDateTime) : null;
+    if (!eventId || !start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      skipped += 1;
+      return;
+    }
+
+    const bodyDescription = sanitizeDescription(eventPayload?.description || '');
+    const location = (eventPayload?.location || '').trim();
+    const isAllDay = Boolean(eventPayload?.allDay);
+    const title = (eventPayload?.title || '').trim() || '無題の予定';
+    const reminderMinutes = getReminderMinutes(eventPayload?.reminderMinutes);
+    const fullDescription = buildDescription(eventId, bodyDescription);
+
+    const eventEntry = existingMap.get(eventId);
+    if (eventEntry) {
+      applyUpdates(eventEntry, { title, start, end, location, fullDescription, isAllDay, reminderMinutes });
+      updated += 1;
+      return;
+    }
+
+    createEvent(calendar, {
+      title,
+      start,
+      end,
+      location,
+      isAllDay,
+      fullDescription,
+      reminderMinutes,
+    });
+    created += 1;
+  });
+
+  deletes.forEach((rawId) => {
+    const scheduleId = typeof rawId === 'string' ? rawId.trim() : '';
+    if (!scheduleId) return;
+    const eventEntry = existingMap.get(scheduleId);
+    if (eventEntry) {
+      try {
+        eventEntry.deleteEvent();
+        existingMap.delete(scheduleId);
+        deleted += 1;
+      } catch (error) {
+        console.error('Failed to delete Google event', scheduleId, error);
+      }
+    }
+  });
+
+  return buildResponse({
+    success: true,
+    message: 'Mutations applied.',
+    created,
+    updated,
+    deleted,
+    skipped,
+  });
 }
 
 function buildExistingMap(events) {

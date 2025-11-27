@@ -57,12 +57,15 @@ flowchart TD
         AJ -->|OK| AK{"編集中ID?"}
         AK -->|新規| AL["addEvent() → Firebase push"]
         AK -->|既存| AM["updateEvent() → Firebase update"]
-        AL --> L
-        AM --> L
+        AL --> AL1["mirrorMutationsToGoogle(upsert)"]
+        AM --> AM1["mirrorMutationsToGoogle(upsert)"]
+        AL1 --> L
+        AM1 --> L
 
         G --> AN["削除ボタン"]
         AN --> AO["deleteEvent() → Firebase remove"]
-        AO --> L
+        AO --> AO1["mirrorMutationsToGoogle(delete)"]
+        AO1 --> L
 
         H --> AP["ドラッグ範囲 → tempイベント"]
         AP --> AQ["モーダル表示"]
@@ -141,7 +144,7 @@ flowchart TD
     K --> L["Blob生成 → ダウンロード"]
 ```
 
-### 予定の作成・編集・削除フロー
+### 予定の作成・編集・削除フロー（Google同期付き）
 
 ```mermaid
 flowchart TD
@@ -158,10 +161,13 @@ flowchart TD
     I -->|OK| K{"新規? or 編集?"}
     K -->|新規| L["addEvent() → Firebase push"]
     K -->|編集| M["updateEvent() → Firebase update"]
-    L --> N["onValue反映後 updateViews()"]
-    M --> N
+    L --> L1["mirrorMutationsToGoogle(upsert)"]
+    M --> M1["mirrorMutationsToGoogle(upsert)"]
+    L1 --> N["onValue反映後 updateViews()"]
+    M1 --> N
     O["削除ボタン"] --> P["deleteEvent() → Firebase remove"]
-    P --> N
+    P --> P1["mirrorMutationsToGoogle(delete)"]
+    P1 --> N
 ```
 
 ### 時間割イベントのロック処理
@@ -191,36 +197,77 @@ flowchart TD
     I -->|Yes| J["setTimeout → Notification"]
 ```
 
-### Google カレンダー自動同期 (フロントエンド)
+### Google カレンダーとの同期
 
 ```mermaid
 flowchart TD
-    A["startAutomaticGoogleSync()"] --> B["setTimeout(30s)"]
-    A --> C["setInterval(5分)"]
-    B --> D["executeSync()"]
-    C --> D
-    D --> E{"isFirebaseEnabled && not in-flight?"}
-    E -->|No| F["スキップ"]
-    E -->|Yes| G["fetchGoogleCalendarEvents({ silent:true })"]
-    G --> H["mergeGoogleEvents()"]
-    H --> I["syncEventsToGoogleCalendar({ silent:true })"]
-    I --> J{"結果"}
-    J -->|成功| K["console.log 成功件数"]
-    J -->|失敗| L["console.error / silent通知"]
+    subgraph Immediate Mirror
+        A["add/update/delete"] --> B["Firebase write 成功"]
+        B --> C["mirrorMutationsToGoogle({upserts|deletes})"]
+        C --> D{"GAS応答"}
+        D -->|Error| E["Firebaseロールバック + エラー表示"]
+        D -->|OK| F["待機解除 / UI続行"]
+    end
+
+    subgraph AutoSync
+        G["startAutomaticGoogleSync()"] --> H["setTimeout(30s)"]
+        G --> I["setInterval(5分)"]
+        H --> J["executeSync()"]
+        I --> J
+        J --> K{"isFirebaseEnabled && not in-flight?"}
+        K -->|No| L["スキップ"]
+        K -->|Yes| M["fetchGoogleCalendarEvents({ silent:true })"]
+        M --> N["mergeGoogleEvents() ※syncGoogle:false"]
+        N --> O["syncEventsToGoogleCalendar({ silent:true })"]
+        O --> P{"結果"}
+        P -->|成功| Q["console.log 成功件数"]
+        P -->|失敗| R["console.error / silent通知"]
+    end
+```
+
+### Google由来を優先する重複解消
+
+```mermaid
+flowchart TD
+    A["fetchGoogleCalendarEvents()"] --> B["mergeGoogleEvents()"]
+    B --> C["localEventsByDateTitle = Map(日付+正規化タイトル)"]
+    C --> D["Googleイベントを1件ずつ normalize"]
+    D --> E{"start/end欠損 or 範囲外?"}
+    E -->|Yes| F["skip"]
+    E -->|No| G["dateKey = formatDateOnly(startTime)"]
+    G --> H["titleKey = normalizeTitleForComparison(title)"]
+    H --> I{"Mapに同キーあり?"}
+    I -->|No| J["ログ: 0件 / 削除なし"]
+    I -->|Yes| K["ログ: 件数 / deleteEvent(syncGoogle:false)"]
+    K --> L{"削除成功?"}
+    L -->|Yes| M["deleted++ / Mapから除去"]
+    L -->|No| N["失敗分をMapへ戻す"]
+    D --> O{"scheduleMgrId or googleEventId 既存?"}
+    O -->|Yes| P["needsExternalUpdate? → updateEvent(syncGoogle:false)"]
+    O -->|No| Q["addEvent(source:'google', syncGoogle:false)"]
 ```
 
 ```mermaid
 flowchart TD
     subgraph Google Apps Script
         A["doPost"] --> B["JSON.parse(payload)"]
-        B --> C["CalendarApp.getCalendarById()"]
-        C --> D["既存イベント取得 (descriptionタグ検索)"]
-        D --> E{"schedule_mgr_id 既存?"}
-        E -->|Yes| F["イベント更新 (タイトル/時間/リマインダー)"]
-        E -->|No| G["イベント新規作成"]
-        F --> H["created/updated カウント更新"]
-        G --> H
-        H --> I["JSONレスポンス返却 (CORSヘッダー付き)"]
+        B --> C{"payload.action"}
+        C -->|mutations| D["processMutations()"]
+        C -->|default| E["sync snapshot window"]
+        
+        D --> F["既存検索 (descriptionタグ)"]
+        F --> G{"schedule_mgr_id 既存?"}
+        G -->|Yes| H["applyUpdates()"]
+        G -->|No| I["createEvent()"]
+        D --> J["deletes.forEach → deleteEvent()"]
+        H --> K["結果集計 → JSONレスポンス"]
+        I --> K
+        J --> K
+        
+        E --> L["calendar.getEvents(window)"]
+        L --> M["buildExistingMap()"]
+        M --> N["新規/更新/スキップ判定"]
+        N --> K
     end
 ```
 
