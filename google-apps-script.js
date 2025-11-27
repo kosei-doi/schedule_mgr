@@ -41,6 +41,8 @@ function doPost(e) {
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    
+    // 初期化を確実にする（エラー時の安全性のため）
 
     events.forEach((eventPayload) => {
       const eventId = (eventPayload?.id || '').trim() || Utilities.getUuid();

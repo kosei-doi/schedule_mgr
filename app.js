@@ -289,7 +289,9 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
       ev.isTimetable !== true &&
       ev.startTime &&
       ev.endTime &&
-      isEventInAllowedRange(ev, rangeSet)
+      isEventInAllowedRange(ev, rangeSet) &&
+      // 既にgoogleEventIdが設定されているイベントは除外（既に同期済み）
+      !ev.googleEventId
   );
   if (syncableEvents.length === 0) {
     if (!silent) {
@@ -298,12 +300,33 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     }
     return { created: 0, updated: 0, skipped: 0 };
   }
+  
+  // 同期前に重複チェック：同じ内容のイベントが既に存在する場合はスキップ
+  const deduplicatedEvents = syncableEvents.filter(ev => {
+    // 既に同じ内容のイベントが存在するかチェック（strictMode=true）
+    const isDuplicate = isDuplicateEvent(ev, events, true);
+    if (isDuplicate) {
+      console.warn('同期対象から重複イベントを除外:', ev.title);
+      return false;
+    }
+    return true;
+  });
+  
+  if (deduplicatedEvents.length === 0) {
+    if (!silent) {
+      hideLoading();
+      showMessage('同期対象の予定はすべて重複のためスキップされました。', 'info', 4000);
+    }
+    return { created: 0, updated: 0, skipped: syncableEvents.length };
+  }
+  
+  const skippedCount = syncableEvents.length - deduplicatedEvents.length;
 
   const payload = {
     source: 'schedule_mgr',
     exportedAt: new Date().toISOString(),
-    eventCount: syncableEvents.length,
-    events: syncableEvents.map(buildSyncEventPayload),
+    eventCount: deduplicatedEvents.length,
+    events: deduplicatedEvents.map(buildSyncEventPayload),
   };
 
   let response;
@@ -340,12 +363,13 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
       hideLoading();
       showMessage('Googleカレンダーと同期しました。', 'success', 5000);
     }
-    return { created: 0, updated: 0, skipped: 0 };
+    return { created: 0, updated: 0, skipped: skippedCount || 0 };
   }
 
   const created = Number(result?.created) || 0;
   const updated = Number(result?.updated) || 0;
-  const skipped = Number(result?.skipped) || 0;
+  const skippedFromServer = Number(result?.skipped) || 0;
+  const totalSkipped = skippedCount + skippedFromServer; // クライアント側とサーバー側のスキップ数を合計
   const message =
     typeof result?.message === 'string' && result.message.trim().length > 0
       ? result.message.trim()
@@ -353,14 +377,14 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
 
   if (!silent) {
     hideLoading();
-    showMessage(`${message} (作成:${created} / 更新:${updated} / スキップ:${skipped})`, 'success', 6000);
+    showMessage(`${message} (作成:${created} / 更新:${updated} / スキップ:${totalSkipped})`, 'success', 6000);
   } else {
     // Always hide loading, even in silent mode
     hideLoading();
-    console.log(`Google Sync Result: ${message} | created=${created} updated=${updated} skipped=${skipped}`);
+    console.log(`Google Sync Result: ${message} | created=${created} updated=${updated} skipped=${totalSkipped} (client:${skippedCount} server:${skippedFromServer})`);
   }
   
-  return { created, updated, skipped };
+  return { created, updated, skipped: totalSkipped };
 }
 
 async function fetchGoogleCalendarEvents({ silent = false } = {}) {
@@ -476,11 +500,12 @@ async function clearGoogleCalendarEvents({ silent = false } = {}) {
 function mergeGoogleEvents(googleEvents = [], ranges) {
   let created = 0;
   let updated = 0;
+  let skipped = 0;
 
   // Ensure events is an array
   if (!Array.isArray(events)) {
     console.warn('mergeGoogleEvents: events is not an array');
-    return { created: 0, updated: 0 };
+    return { created: 0, updated: 0, skipped: 0 };
   }
 
   const eventsById = new Map(events.map(ev => [ev.id, ev]));
@@ -494,15 +519,24 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
 
   googleEvents.forEach(googleEvent => {
     const normalized = normalizeGoogleEvent(googleEvent, rangeSet);
-    if (normalized.filteredOut) return;
-    if (!normalized.startTime || !normalized.endTime) return;
+    if (normalized.filteredOut) {
+      skipped += 1;
+      return;
+    }
+    if (!normalized.startTime || !normalized.endTime) {
+      skipped += 1;
+      return;
+    }
 
+    // 1. scheduleMgrIdで既存イベントを検索
     if (googleEvent.scheduleMgrId && eventsById.has(googleEvent.scheduleMgrId)) {
       const existing = eventsById.get(googleEvent.scheduleMgrId);
       if (existing.isTimetable === true) {
+        skipped += 1;
         return;
       }
       if (!isEventInAllowedRange(existing, rangeSet)) {
+        skipped += 1;
         return;
       }
       if (needsExternalUpdate(existing, normalized)) {
@@ -512,12 +546,15 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
       return;
     }
 
+    // 2. googleEventIdで既存イベントを検索
     if (normalized.googleEventId && eventsByGoogleId.has(normalized.googleEventId)) {
       const existing = eventsByGoogleId.get(normalized.googleEventId);
-       if (existing.isTimetable === true) {
+      if (existing.isTimetable === true) {
+        skipped += 1;
         return;
       }
       if (!isEventInAllowedRange(existing, rangeSet)) {
+        skipped += 1;
         return;
       }
       if (needsExternalUpdate(existing, normalized)) {
@@ -531,6 +568,57 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
       return;
     }
 
+    // 3. 内容ベースの重複チェック（タイトル、開始時刻、終了時刻が同じ）
+    // 同期時は strictMode=true で時間制限なしでチェック
+    const duplicateByContent = isDuplicateEvent({
+      title: normalized.title || '',
+      startTime: normalized.startTime || '',
+      endTime: normalized.endTime || '',
+    }, events, true); // strictMode=true で同期時の重複を厳密にチェック
+    
+    if (duplicateByContent) {
+      console.warn('Googleイベントの重複を検出（内容ベース）:', normalized.title);
+      skipped += 1;
+      return;
+    }
+    
+    // 4. 追加の重複チェック：同じタイトルで開始時刻が非常に近い（±5分以内）イベントも重複とみなす
+    const similarEvents = events.filter(existing => {
+      const existingTitle = (existing.title || '').trim();
+      const normalizedTitle = (normalized.title || '').trim();
+      
+      if (existingTitle !== normalizedTitle || !normalizedTitle) {
+        return false;
+      }
+      
+      const existingStart = existing.startTime ? new Date(existing.startTime).getTime() : 0;
+      const normalizedStart = normalized.startTime ? new Date(normalized.startTime).getTime() : 0;
+      
+      if (!existingStart || !normalizedStart) {
+        return false;
+      }
+      
+      // 開始時刻が±5分以内で、終了時刻も±5分以内
+      const startDiff = Math.abs(existingStart - normalizedStart);
+      const existingEnd = existing.endTime ? new Date(existing.endTime).getTime() : 0;
+      const normalizedEnd = normalized.endTime ? new Date(normalized.endTime).getTime() : 0;
+      const endDiff = existingEnd && normalizedEnd ? Math.abs(existingEnd - normalizedEnd) : Infinity;
+      
+      // 5分以内の差で、かつ終了時刻の差も5分以内（または終了時刻が不明）
+      if (startDiff <= 5 * 60 * 1000 && (endDiff <= 5 * 60 * 1000 || !existingEnd || !normalizedEnd)) {
+        return true;
+      }
+      
+      return false;
+    });
+    
+    if (similarEvents.length > 0) {
+      console.warn('Googleイベントの重複を検出（類似イベント）:', normalized.title);
+      skipped += 1;
+      return;
+    }
+
+    // 5. 新規イベントとして追加（addEvent内でも重複チェックが実行される）
     const newEventId = addEvent({
       ...normalized,
       isTimetable: false,
@@ -539,10 +627,14 @@ function mergeGoogleEvents(googleEvents = [], ranges) {
     });
     if (newEventId) {
       created += 1;
+    } else {
+      // addEvent内で重複が検出された場合
+      skipped += 1;
+      console.warn('addEventで重複が検出されました:', normalized.title);
     }
   });
 
-  return { created, updated };
+  return { created, updated, skipped };
 }
 
 function normalizeGoogleEvent(googleEvent = {}, ranges) {
@@ -582,7 +674,49 @@ function normalizeForCompare(value, key) {
   return value;
 }
 
-// イベントを追加（combiと同じロジック）
+// 重複イベントをチェック（タイトル、開始時刻、終了時刻が同じ）
+// strictMode: true の場合は時間制限なしでチェック（同期時用）
+function isDuplicateEvent(newEvent, existingEvents = events, strictMode = false) {
+  if (!Array.isArray(existingEvents) || existingEvents.length === 0) {
+    return false;
+  }
+  
+  const newTitle = (newEvent.title || '').trim();
+  const newStart = normalizeEventDateTimeString(newEvent.startTime) || newEvent.startTime || '';
+  const newEnd = normalizeEventDateTimeString(newEvent.endTime) || newEvent.endTime || '';
+  
+  if (!newTitle || !newStart || !newEnd) {
+    return false;
+  }
+  
+  // strictMode（同期時）の場合は時間制限なしでチェック
+  // 通常モード（手動追加時）の場合は最近5分以内のイベントのみをチェック（誤検知を防ぐため）
+  const timeThreshold = strictMode ? 0 : (Date.now() - 5 * 60 * 1000);
+  
+  return existingEvents.some(existing => {
+    const existingTitle = (existing.title || '').trim();
+    const existingStart = normalizeEventDateTimeString(existing.startTime) || existing.startTime || '';
+    const existingEnd = normalizeEventDateTimeString(existing.endTime) || existing.endTime || '';
+    
+    // タイトル、開始時刻、終了時刻が一致
+    if (existingTitle === newTitle && existingStart === newStart && existingEnd === newEnd) {
+      // strictMode の場合は時間制限なし、通常モードの場合は最近作成されたイベントのみをチェック
+      if (strictMode) {
+        console.warn('重複イベントを検出（厳密モード）:', { title: newTitle, start: newStart, end: newEnd });
+        return true;
+      } else {
+        const existingCreated = existing.createdAt ? new Date(existing.createdAt).getTime() : 0;
+        if (existingCreated > timeThreshold) {
+          console.warn('重複イベントを検出:', { title: newTitle, start: newStart, end: newEnd });
+          return true;
+        }
+      }
+    }
+    return false;
+  });
+}
+
+// イベントを追加（重複チェック付き）
 function addEvent(event) {
   const normalizedStart = normalizeEventDateTimeString(event.startTime);
   const normalizedEnd = normalizeEventDateTimeString(event.endTime);
@@ -600,6 +734,12 @@ function addEvent(event) {
     updatedAt: new Date().toISOString(),
     lastWriteClientId: clientId
   };
+
+  // 重複チェック
+  if (isDuplicateEvent(newEvent, events)) {
+    console.warn('重複イベントの追加をスキップしました:', newEvent.title);
+    return null;
+  }
 
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、イベントを保存できません。設定を確認してください。';
@@ -625,25 +765,37 @@ function addEvent(event) {
 
 // イベントを更新（combiと同じロジック）
 function updateEvent(id, event) {
-  const existingEvent = (Array.isArray(events) ? events.find(e => e.id === id) : null) || {};
-  const startSource = event.startTime ?? existingEvent.startTime ?? '';
-  const endSource = event.endTime ?? existingEvent.endTime ?? '';
+  if (!id) {
+    console.error('updateEvent: イベントIDが指定されていません');
+    return;
+  }
+
+  const existingEvent = Array.isArray(events) ? events.find(e => e.id === id) : null;
+  
+  // 既存イベントが存在しない場合の警告
+  if (!existingEvent) {
+    console.warn(`updateEvent: イベントID ${id} が見つかりません。新規作成として処理します。`);
+  }
+
+  const startSource = event.startTime ?? existingEvent?.startTime ?? '';
+  const endSource = event.endTime ?? existingEvent?.endTime ?? '';
   const normalizedStart = normalizeEventDateTimeString(startSource);
   const normalizedEnd = normalizeEventDateTimeString(endSource);
+  
   const updatedEvent = {
-    ...existingEvent,
+    ...(existingEvent || {}),
     ...event,
     startTime: normalizedStart || startSource,
     endTime: normalizedEnd || endSource,
     allDay: event.allDay === true,
-    isTimetable: event.isTimetable === true ? true : existingEvent.isTimetable === true,
-    source: event.source || existingEvent.source || 'local',
-    googleEventId: event.googleEventId || existingEvent.googleEventId || null,
+    isTimetable: event.isTimetable === true ? true : (existingEvent?.isTimetable === true),
+    source: event.source || existingEvent?.source || 'local',
+    googleEventId: event.googleEventId || existingEvent?.googleEventId || null,
     isGoogleImported:
       event.isGoogleImported === true
         ? true
-        : existingEvent.isGoogleImported === true,
-    externalUpdatedAt: event.externalUpdatedAt || existingEvent.externalUpdatedAt || null,
+        : (existingEvent?.isGoogleImported === true),
+    externalUpdatedAt: event.externalUpdatedAt || existingEvent?.externalUpdatedAt || null,
     updatedAt: new Date().toISOString(),
     lastWriteClientId: clientId
   };
@@ -686,6 +838,186 @@ function deleteEvent(id) {
   }
 }
 
+// 重複イベントを検出して整理する関数
+async function cleanupDuplicateEvents({ silent = false } = {}) {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    const message = 'Firebaseが無効のため、重複整理を実行できません。';
+    if (!silent) showMessage(message, 'error', 6000);
+    throw new Error(message);
+  }
+
+  if (!silent) {
+    showLoading('重複イベントを検出中...');
+  }
+
+  try {
+    // Firebaseから全イベントを取得
+    const eventsRef = window.firebase.ref(window.firebase.db, 'events');
+    const snapshot = await window.firebase.get(eventsRef);
+    const data = snapshot.val();
+    
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      if (!silent) {
+        hideLoading();
+        showMessage('イベントデータが見つかりませんでした。', 'info', 4000);
+      }
+      return { removed: 0, kept: 0, total: 0 };
+    }
+
+    // イベントを配列に変換
+    const allEvents = Object.keys(data).map(key => ({
+      id: key,
+      ...data[key],
+      startTime: normalizeEventDateTimeString(data[key].startTime) || data[key].startTime || '',
+      endTime: normalizeEventDateTimeString(data[key].endTime) || data[key].endTime || '',
+    }));
+
+    // 重複を検出（タイトル、開始時刻、終了時刻が同じ）
+    const duplicateGroups = new Map();
+    
+    allEvents.forEach(event => {
+      const title = (event.title || '').trim();
+      const startTime = event.startTime || '';
+      const endTime = event.endTime || '';
+      
+      if (!title || !startTime || !endTime) {
+        return; // 不完全なデータはスキップ
+      }
+      
+      // 重複キーを作成
+      const duplicateKey = `${title}|${startTime}|${endTime}`;
+      
+      if (!duplicateGroups.has(duplicateKey)) {
+        duplicateGroups.set(duplicateKey, []);
+      }
+      duplicateGroups.get(duplicateKey).push(event);
+    });
+
+    // 重複グループから削除対象を決定（2つ以上あるグループのみ）
+    const toDelete = [];
+    let keptCount = 0;
+    
+    duplicateGroups.forEach((group, key) => {
+      if (group.length <= 1) {
+        keptCount += group.length;
+        return; // 重複なし
+      }
+      
+      // 重複がある場合、最も古い（または最も完全な）イベントを保持
+      // 優先順位: createdAtが古い > updatedAtが古い > より多くのフィールドがある
+      group.sort((a, b) => {
+        const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (aCreated !== bCreated) return aCreated - bCreated;
+        
+        const aUpdated = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+        const bUpdated = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+        if (aUpdated !== bUpdated) return aUpdated - bUpdated;
+        
+        // より多くのフィールドがあるものを優先
+        const aFields = Object.keys(a).length;
+        const bFields = Object.keys(b).length;
+        return bFields - aFields;
+      });
+      
+      // 最初の1つを保持、残りを削除対象に
+      keptCount += 1;
+      for (let i = 1; i < group.length; i++) {
+        toDelete.push(group[i]);
+      }
+    });
+
+    if (toDelete.length === 0) {
+      if (!silent) {
+        hideLoading();
+        showMessage('重複イベントは見つかりませんでした。', 'success', 4000);
+      }
+      return { removed: 0, kept: keptCount, total: allEvents.length };
+    }
+
+    // サイレントモードの場合は確認なしで削除、通常モードの場合は確認を求める
+    if (!silent) {
+      hideLoading();
+      const confirmed = await showConfirmModal(
+        `重複イベント ${toDelete.length} 件を削除しますか？\n（${keptCount} 件のイベントを保持します）`,
+        '重複イベントの整理'
+      );
+      if (!confirmed) {
+        return { removed: 0, kept: keptCount, total: allEvents.length, cancelled: true };
+      }
+      showLoading('重複イベントを削除中...');
+    } else {
+      // サイレントモードでも削除中であることをログに記録
+      console.log(`自動重複整理: ${toDelete.length} 件の重複イベントを削除します`);
+    }
+
+    // 重複イベントを削除
+    let deletedCount = 0;
+    let errorCount = 0;
+    
+    for (const event of toDelete) {
+      try {
+        const eventRef = window.firebase.ref(window.firebase.db, `events/${event.id}`);
+        await window.firebase.remove(eventRef);
+        deletedCount++;
+        console.log(`重複イベントを削除: ${event.id} - ${event.title}`);
+      } catch (error) {
+        console.error(`イベント削除エラー (${event.id}):`, error);
+        errorCount++;
+      }
+    }
+
+    if (!silent) {
+      hideLoading();
+      if (errorCount > 0) {
+        showMessage(
+          `重複整理完了: ${deletedCount} 件削除、${errorCount} 件エラー`,
+          'error',
+          6000
+        );
+      } else {
+        showMessage(
+          `重複整理完了: ${deletedCount} 件の重複イベントを削除しました`,
+          'success',
+          6000
+        );
+      }
+    } else if (deletedCount > 0) {
+      // サイレントモードでも削除があった場合は通知を表示
+      if (errorCount > 0) {
+        showMessage(
+          `自動重複整理: ${deletedCount} 件削除、${errorCount} 件エラー`,
+          'error',
+          5000
+        );
+      } else {
+        showMessage(
+          `自動重複整理: ${deletedCount} 件の重複イベントを削除しました`,
+          'success',
+          5000
+        );
+      }
+    }
+
+    // イベントリストを再読み込み
+    loadEvents();
+
+    return {
+      removed: deletedCount,
+      kept: keptCount,
+      total: allEvents.length,
+      errors: errorCount
+    };
+  } catch (error) {
+    console.error('重複整理エラー:', error);
+    if (!silent) {
+      hideLoading();
+      showMessage('重複整理に失敗しました。再度お試しください。', 'error', 6000);
+    }
+    throw error;
+  }
+}
+
 async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
   if (!skipConfirm) {
     const confirmed = await showConfirmModal('全ての予定と時間割データを削除します。よろしいですか？', '削除の確認');
@@ -723,6 +1055,7 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
 
 if (typeof window !== 'undefined') {
   window.clearAllEvents = clearAllEvents;
+  window.cleanupDuplicateEvents = cleanupDuplicateEvents;
   window.syncEventsToGoogleCalendar = syncEventsToGoogleCalendar;
   window.fetchGoogleCalendarEvents = fetchGoogleCalendarEvents;
   window.clearGoogleCalendarEvents = clearGoogleCalendarEvents;
@@ -735,16 +1068,29 @@ function startAutomaticGoogleSync() {
   }
   if (googleSyncIntervalId) {
     // 既に実行中の場合は停止して再開
+    console.log('既存のGoogle同期を停止して再開します。');
     stopAutomaticGoogleSync();
   }
 
   const syncTask = async () => {
-    if (!isFirebaseEnabled) return;
-    if (googleSyncInFlight) return;
+    if (!isFirebaseEnabled) {
+      console.log('Firebaseが無効のため、Google同期をスキップします。');
+      return;
+    }
+    if (googleSyncInFlight) {
+      console.log('Google同期が既に実行中のため、スキップします。');
+      return;
+    }
     googleSyncInFlight = true;
     try {
+      console.log('Googleカレンダー同期を開始します...');
+      // 順序を保証：まずGoogleから取得してマージ、その後ローカルをGoogleに同期
+      // これにより重複を最小限に抑える
       await fetchGoogleCalendarEvents({ silent: true });
+      // 少し待機してから同期（重複チェックが確実に反映されるように）
+      await new Promise(resolve => setTimeout(resolve, 1000));
       await syncEventsToGoogleCalendar({ silent: true });
+      console.log('Googleカレンダー同期が完了しました。');
     } catch (error) {
       console.error('自動Googleカレンダー同期に失敗しました。', error);
     } finally {
@@ -757,6 +1103,7 @@ function startAutomaticGoogleSync() {
     await syncTask();
   }, INITIAL_GOOGLE_SYNC_DELAY_MS);
   googleSyncIntervalId = setInterval(syncTask, GOOGLE_SYNC_INTERVAL_MS);
+  console.log('自動Googleカレンダー同期を開始しました。');
 }
 
 function stopAutomaticGoogleSync() {
@@ -2158,6 +2505,24 @@ document.addEventListener('DOMContentLoaded', function() {
   enableWeekGridClickToCreate();
   
   console.log('アプリケーション初期化完了');
+  
+  // 初期化後に重複イベントを自動整理（サイレントモード）
+  // ユーザーに確認を求めずに自動的に整理し、結果のみ通知
+  setTimeout(async () => {
+    try {
+      const result = await cleanupDuplicateEvents({ silent: true });
+      if (result && result.removed > 0) {
+        console.log(`自動重複整理完了: ${result.removed} 件の重複イベントを削除しました`);
+        // 結果は cleanupDuplicateEvents 内で通知される
+      } else if (result && result.total > 0) {
+        console.log(`自動重複整理: 重複イベントは見つかりませんでした（全 ${result.total} 件）`);
+      }
+    } catch (error) {
+      console.error('自動重複整理エラー:', error);
+      // エラーはサイレントに処理（ユーザーに通知しない）
+    }
+  }, 3000); // 3秒後に実行（イベント読み込み完了を待つ）
+  
   startAutomaticGoogleSync();
 });
 
@@ -2398,11 +2763,20 @@ function setupEventListeners() {
   eventForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    // Prevent double submission
+    // Prevent double submission - より厳密なチェック
     if (eventForm.dataset.submitting === 'true') {
+      console.warn('フォーム送信が既に処理中です。重複送信をスキップします。');
       return;
     }
     eventForm.dataset.submitting = 'true';
+    
+    // 送信ボタンを無効化
+    const submitBtn = eventForm.querySelector('button[type="submit"]');
+    const originalSubmitText = submitBtn?.textContent;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = '保存中...';
+    }
     
     try {
       showLoading('保存中...');
@@ -2447,7 +2821,32 @@ function setupEventListeners() {
       if (errors.length > 0) {
         hideLoading();
         showMessage(errors.join(' / '), 'error', 6000);
+        // Reset button state on early return
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          if (originalSubmitText) {
+            submitBtn.textContent = originalSubmitText;
+          }
+        }
+        delete eventForm.dataset.submitting;
         return;
+      }
+      
+      // 新規イベントの場合、重複チェック
+      if (!editingEventId || editingEventId.startsWith('temp-')) {
+        if (isDuplicateEvent(event, events)) {
+          hideLoading();
+          showMessage('同じ内容の予定が既に存在します。', 'error', 6000);
+          // Reset button state on early return
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            if (originalSubmitText) {
+              submitBtn.textContent = originalSubmitText;
+            }
+          }
+          delete eventForm.dataset.submitting;
+          return;
+        }
       }
       
       if (editingEventId && typeof editingEventId === 'string' && editingEventId.startsWith('temp-')) {
@@ -2455,6 +2854,14 @@ function setupEventListeners() {
         if (!Array.isArray(events)) {
           hideLoading();
           showMessage('イベントの保存に失敗しました。', 'error', 6000);
+          // Reset button state on early return
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            if (originalSubmitText) {
+              submitBtn.textContent = originalSubmitText;
+            }
+          }
+          delete eventForm.dataset.submitting;
           return;
         }
         const tempEventIndex = events.findIndex(e => e.id === editingEventId);
@@ -2519,15 +2926,23 @@ function setupEventListeners() {
       }
       
       hideLoading();
+      const wasEditing = editingEventId && !editingEventId.startsWith('temp-');
       closeEventModal();
-      showMessage(editingEventId ? '予定を更新しました' : '予定を追加しました', 'success', 3000);
+      showMessage(wasEditing ? '予定を更新しました' : '予定を追加しました', 'success', 3000);
     } catch (error) {
       hideLoading();
       console.error('イベント保存エラー:', error);
       showMessage('イベントの保存に失敗しました。再度お試しください。', 'error', 6000);
+      // エラー時もeditingEventIdをリセットしない（ユーザーが再試行できるように）
     } finally {
-      // Reset submission flag
+      // Reset submission flag and button state
       delete eventForm.dataset.submitting;
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        if (originalSubmitText) {
+          submitBtn.textContent = originalSubmitText;
+        }
+      }
     }
   });
   
