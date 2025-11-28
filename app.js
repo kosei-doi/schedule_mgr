@@ -3,6 +3,41 @@ let unsubscribeChildAdded = null;
 let unsubscribeChildChanged = null;
 let unsubscribeChildRemoved = null;
 
+// イベントリスナーのクリーンアップ用
+const eventListeners = {
+  // { element, event, handler, options }
+  listeners: [],
+  add: function(element, event, handler, options) {
+    if (!element) return null;
+    element.addEventListener(event, handler, options);
+    const listener = { element, event, handler, options };
+    this.listeners.push(listener);
+    return listener;
+  },
+  remove: function(listener) {
+    if (!listener) return;
+    try {
+      listener.element.removeEventListener(listener.event, listener.handler, listener.options);
+      const index = this.listeners.indexOf(listener);
+      if (index > -1) {
+        this.listeners.splice(index, 1);
+      }
+    } catch (error) {
+      console.warn('Failed to remove event listener:', error);
+    }
+  },
+  removeAll: function() {
+    this.listeners.forEach(listener => {
+      try {
+        listener.element.removeEventListener(listener.event, listener.handler, listener.options);
+      } catch (error) {
+        console.warn('Failed to remove event listener:', error);
+      }
+    });
+    this.listeners = [];
+  }
+};
+
 // グローバル変数
 let events = [];
 let currentDate = new Date();
@@ -355,83 +390,101 @@ async function loadEvents() {
   
   // 以降: child イベントで差分更新
   unsubscribeChildAdded = window.firebase.onChildAdded(eventsRef, (snapshot) => {
-    const key = snapshot.key;
-    if (!key) return;
-    
-    const newEvent = normalizeEventFromSnapshot(snapshot, key);
-    if (!isEventInAllowedRange(newEvent, allowedRanges)) return;
-    
-    // 既存のイベントをチェック
-    const existingIndex = events.findIndex(e => e.id === key);
-    if (existingIndex === -1) {
-      events.push(newEvent);
-      events.sort((a, b) => {
-        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
-        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
-        if (Number.isNaN(aTime)) return 1;
-        if (Number.isNaN(bTime)) return -1;
-        return aTime - bTime;
-      });
-      console.log('Firebase: イベント追加', key);
-      updateViewsForEvent(newEvent);
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      
+      const newEvent = normalizeEventFromSnapshot(snapshot, key);
+      if (!isEventInAllowedRange(newEvent, allowedRanges)) return;
+      
+      // 既存のイベントをチェック
+      const existingIndex = events.findIndex(e => e.id === key);
+      if (existingIndex === -1) {
+        events.push(newEvent);
+        events.sort((a, b) => {
+          const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+          const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+          if (Number.isNaN(aTime)) return 1;
+          if (Number.isNaN(bTime)) return -1;
+          return aTime - bTime;
+        });
+        console.log('Firebase: イベント追加', key);
+        updateViewsForEvent(newEvent);
+      }
+    } catch (error) {
+      console.error('Firebase onChildAdded コールバックエラー:', error);
+      // エラーが発生してもアプリを停止させない
     }
   }, (error) => {
     console.error('Firebase onChildAdded エラー:', error);
+    showMessage('予定の追加に失敗しました。', 'error', 4000);
   });
   
   unsubscribeChildChanged = window.firebase.onChildChanged(eventsRef, (snapshot) => {
-    const key = snapshot.key;
-    if (!key) return;
-    
-    const updatedEvent = normalizeEventFromSnapshot(snapshot, key);
-    const existingIndex = events.findIndex(e => e.id === key);
-    
-    if (existingIndex !== -1) {
-      const oldEvent = events[existingIndex];
-      // updatedAt が変わっていない場合はスキップ（無限ループ防止）
-      if (oldEvent.updatedAt === updatedEvent.updatedAt && oldEvent.lastWriteClientId === updatedEvent.lastWriteClientId) {
-        return;
-      }
+    try {
+      const key = snapshot.key;
+      if (!key) return;
       
-      events[existingIndex] = updatedEvent;
-      events.sort((a, b) => {
-        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
-        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
-        if (Number.isNaN(aTime)) return 1;
-        if (Number.isNaN(bTime)) return -1;
-        return aTime - bTime;
-      });
+      const updatedEvent = normalizeEventFromSnapshot(snapshot, key);
+      const existingIndex = events.findIndex(e => e.id === key);
       
-      const wasInRange = isEventInAllowedRange(oldEvent, allowedRanges);
-      const isInRange = isEventInAllowedRange(updatedEvent, allowedRanges);
-      
-      console.log('Firebase: イベント更新', key);
-      // 範囲外→範囲内、範囲内→範囲外、範囲内で日付変更の場合は更新
-      if (wasInRange || isInRange) {
-        updateViewsForEvent(updatedEvent);
-        if (wasInRange && !isInRange) {
-          // 範囲外に移動した場合、旧日付も更新
-          updateViewsForEvent(oldEvent);
+      if (existingIndex !== -1) {
+        const oldEvent = events[existingIndex];
+        // updatedAt が変わっていない場合はスキップ（無限ループ防止）
+        if (oldEvent.updatedAt === updatedEvent.updatedAt && oldEvent.lastWriteClientId === updatedEvent.lastWriteClientId) {
+          return;
+        }
+        
+        events[existingIndex] = updatedEvent;
+        events.sort((a, b) => {
+          const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+          const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+          if (Number.isNaN(aTime)) return 1;
+          if (Number.isNaN(bTime)) return -1;
+          return aTime - bTime;
+        });
+        
+        const wasInRange = isEventInAllowedRange(oldEvent, allowedRanges);
+        const isInRange = isEventInAllowedRange(updatedEvent, allowedRanges);
+        
+        console.log('Firebase: イベント更新', key);
+        // 範囲外→範囲内、範囲内→範囲外、範囲内で日付変更の場合は更新
+        if (wasInRange || isInRange) {
+          updateViewsForEvent(updatedEvent);
+          if (wasInRange && !isInRange) {
+            // 範囲外に移動した場合、旧日付も更新
+            updateViewsForEvent(oldEvent);
+          }
         }
       }
+    } catch (error) {
+      console.error('Firebase onChildChanged コールバックエラー:', error);
+      // エラーが発生してもアプリを停止させない
     }
   }, (error) => {
     console.error('Firebase onChildChanged エラー:', error);
+    showMessage('予定の更新に失敗しました。', 'error', 4000);
   });
   
   unsubscribeChildRemoved = window.firebase.onChildRemoved(eventsRef, (snapshot) => {
-    const key = snapshot.key;
-    if (!key) return;
-    
-    const existingIndex = events.findIndex(e => e.id === key);
-    if (existingIndex !== -1) {
-      const removedEvent = events[existingIndex];
-      events.splice(existingIndex, 1);
-      console.log('Firebase: イベント削除', key);
-      updateViewsForEvent(removedEvent);
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      
+      const existingIndex = events.findIndex(e => e.id === key);
+      if (existingIndex !== -1) {
+        const removedEvent = events[existingIndex];
+        events.splice(existingIndex, 1);
+        console.log('Firebase: イベント削除', key);
+        updateViewsForEvent(removedEvent);
+      }
+    } catch (error) {
+      console.error('Firebase onChildRemoved コールバックエラー:', error);
+      // エラーが発生してもアプリを停止させない
     }
   }, (error) => {
     console.error('Firebase onChildRemoved エラー:', error);
+    showMessage('予定の削除に失敗しました。', 'error', 4000);
   });
   
   // 統合解除関数
@@ -1256,11 +1309,9 @@ async function updateEvent(id, event, options = {}) {
         silent: true,
       });
     } catch (error) {
-      if (existingEvent && existingEvent.id) {
-        const { id: _omitId, ...payload } = existingEvent;
-        await window.firebase.set(eventRef, payload).catch(() => {});
-      }
-      throw error;
+      console.error('Google同期エラー（更新）:', error);
+      // Google同期が失敗してもFirebaseの更新は成功しているので、エラーをスローしない
+      // ユーザーには通知しない（silent: trueの意図）
     }
   }
 
@@ -1296,11 +1347,9 @@ async function deleteEvent(id, options = {}) {
         silent: true,
       });
     } catch (error) {
-      if (existingEvent) {
-        const { id: _omitId, ...payload } = existingEvent;
-        await window.firebase.set(eventRef, payload).catch(() => {});
-      }
-      throw error;
+      console.error('Google同期エラー（削除）:', error);
+      // Google同期が失敗してもFirebaseの削除は成功しているので、エラーをスローしない
+      // ユーザーには通知しない（silent: trueの意図）
     }
   }
 
@@ -2920,43 +2969,61 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 window.addEventListener('beforeunload', () => {
+  // Firebaseリスナーのクリーンアップ
   if (typeof unsubscribeEvents === 'function') {
     unsubscribeEvents();
     unsubscribeEvents = null;
   }
+  // すべてのイベントリスナーのクリーンアップ
+  eventListeners.removeAll();
   clearScheduledNotifications();
   stopAutomaticGoogleSync();
 });
 
 // イベントリスナーの設定
 function setupEventListeners() {
+  // 既存のリスナーをクリーンアップ（再初期化時）
+  eventListeners.removeAll();
+  
   // 日付ナビゲーション（日次・週次・月次用）
   const prevDayBtn = safeGetElementById('prevDay');
   if (prevDayBtn) {
-    prevDayBtn.addEventListener('click', () => {
-      if (currentView === 'day') {
-        currentDate = addDays(currentDate, -1);
-      } else if (currentView === 'week') {
-        currentDate = addDays(currentDate, -7);
-      } else if (currentView === 'month') {
-        currentDate = addMonths(currentDate, -1);
+    const handler = () => {
+      try {
+        if (currentView === 'day') {
+          currentDate = addDays(currentDate, -1);
+        } else if (currentView === 'week') {
+          currentDate = addDays(currentDate, -7);
+        } else if (currentView === 'month') {
+          currentDate = addMonths(currentDate, -1);
+        }
+        updateViews();
+      } catch (error) {
+        console.error('Error in prevDay handler:', error);
+        showMessage('日付の移動に失敗しました。', 'error', 3000);
       }
-      updateViews();
-    });
+    };
+    eventListeners.add(prevDayBtn, 'click', handler);
   }
   
   const nextDayBtn = safeGetElementById('nextDay');
   if (nextDayBtn) {
-    nextDayBtn.addEventListener('click', () => {
-      if (currentView === 'day') {
-        currentDate = addDays(currentDate, 1);
-      } else if (currentView === 'week') {
-        currentDate = addDays(currentDate, 7);
-      } else if (currentView === 'month') {
-        currentDate = addMonths(currentDate, 1);
+    const handler = () => {
+      try {
+        if (currentView === 'day') {
+          currentDate = addDays(currentDate, 1);
+        } else if (currentView === 'week') {
+          currentDate = addDays(currentDate, 7);
+        } else if (currentView === 'month') {
+          currentDate = addMonths(currentDate, 1);
+        }
+        updateViews();
+      } catch (error) {
+        console.error('Error in nextDay handler:', error);
+        showMessage('日付の移動に失敗しました。', 'error', 3000);
       }
-      updateViews();
-    });
+    };
+    eventListeners.add(nextDayBtn, 'click', handler);
   }
   
   // 月次ナビゲーション（ヘッダーの矢印を使用）
@@ -2964,38 +3031,62 @@ function setupEventListeners() {
   
   const todayBtn = safeGetElementById('todayBtn');
   if (todayBtn) {
-    todayBtn.addEventListener('click', () => {
-      currentDate = new Date();
-      updateViews();
-    });
+    const handler = () => {
+      try {
+        currentDate = new Date();
+        updateViews();
+      } catch (error) {
+        console.error('Error in todayBtn handler:', error);
+        showMessage('今日の日付への移動に失敗しました。', 'error', 3000);
+      }
+    };
+    eventListeners.add(todayBtn, 'click', handler);
   }
   
   // ビュー切り替え
   const dayViewBtn = safeGetElementById('dayViewBtn');
   if (dayViewBtn) {
-    dayViewBtn.addEventListener('click', () => {
-      currentView = 'day';
-      switchView('day');
-      updateViews();
-    });
+    const handler = () => {
+      try {
+        currentView = 'day';
+        switchView('day');
+        updateViews();
+      } catch (error) {
+        console.error('Error in dayViewBtn handler:', error);
+        showMessage('ビューの切り替えに失敗しました。', 'error', 3000);
+      }
+    };
+    eventListeners.add(dayViewBtn, 'click', handler);
   }
   
   const weekViewBtn = safeGetElementById('weekViewBtn');
   if (weekViewBtn) {
-    weekViewBtn.addEventListener('click', () => {
-      currentView = 'week';
-      switchView('week');
-      updateViews();
-    });
+    const handler = () => {
+      try {
+        currentView = 'week';
+        switchView('week');
+        updateViews();
+      } catch (error) {
+        console.error('Error in weekViewBtn handler:', error);
+        showMessage('ビューの切り替えに失敗しました。', 'error', 3000);
+      }
+    };
+    eventListeners.add(weekViewBtn, 'click', handler);
   }
   
   const monthViewBtn = safeGetElementById('monthViewBtn');
   if (monthViewBtn) {
-    monthViewBtn.addEventListener('click', () => {
-      currentView = 'month';
-      switchView('month');
-      updateViews();
-    });
+    const handler = () => {
+      try {
+        currentView = 'month';
+        switchView('month');
+        updateViews();
+      } catch (error) {
+        console.error('Error in monthViewBtn handler:', error);
+        showMessage('ビューの切り替えに失敗しました。', 'error', 3000);
+      }
+    };
+    eventListeners.add(monthViewBtn, 'click', handler);
   }
   
   const startInput = safeGetElementById('eventStartTime');
@@ -3006,94 +3097,138 @@ function setupEventListeners() {
   const allDayEndInput = safeGetElementById('eventAllDayEnd');
 
   if (allDayCheckbox) {
-    allDayCheckbox.addEventListener('change', () => {
-      if (allDayCheckbox.disabled) return;
-      const isAllDay = allDayCheckbox.checked;
-      applyAllDayMode(isAllDay, { startInput, endInput, allDayRow });
-      if (isAllDay) {
-        if (allDayStartInput && !allDayStartInput.value) {
-          const source = startInput?.value || formatDateTimeLocal(new Date());
-          allDayStartInput.value = formatDateOnly(source);
+    const handler = () => {
+      try {
+        if (allDayCheckbox.disabled) return;
+        const isAllDay = allDayCheckbox.checked;
+        applyAllDayMode(isAllDay, { startInput, endInput, allDayRow });
+        if (isAllDay) {
+          if (allDayStartInput && !allDayStartInput.value) {
+            const source = startInput?.value || formatDateTimeLocal(new Date());
+            allDayStartInput.value = formatDateOnly(source);
+          }
+          if (allDayEndInput && !allDayEndInput.value) {
+            allDayEndInput.value = allDayStartInput.value;
+          }
         }
-        if (allDayEndInput && !allDayEndInput.value) {
-          allDayEndInput.value = allDayStartInput.value;
-        }
+      } catch (error) {
+        console.error('Error in allDayCheckbox handler:', error);
+        showMessage('終日イベントの設定に失敗しました。', 'error', 3000);
       }
-    });
+    };
+    eventListeners.add(allDayCheckbox, 'change', handler);
   }
   
   const dayAllDayContainer = safeGetElementById('dayAllDayContainer');
   if (dayAllDayContainer) {
-    dayAllDayContainer.addEventListener('click', () => {
-      openAllDayCreateModal(new Date(currentDate));
-    });
+    const handler = () => {
+      try {
+        openAllDayCreateModal(new Date(currentDate));
+      } catch (error) {
+        console.error('Error in dayAllDayContainer handler:', error);
+        showMessage('終日イベントの作成に失敗しました。', 'error', 3000);
+      }
+    };
+    eventListeners.add(dayAllDayContainer, 'click', handler);
   }
 
   document.querySelectorAll('.week-all-day-columns .all-day-column').forEach((column) => {
-    column.addEventListener('click', () => {
-      const dayIndex = Number(column.dataset.day || 0);
-      const weekStart = getWeekStart(currentDate);
-      const targetDate = new Date(weekStart);
-      targetDate.setDate(weekStart.getDate() + dayIndex);
-      openAllDayCreateModal(targetDate);
-    });
+    const handler = () => {
+      try {
+        const dayIndex = Number(column.dataset.day || 0);
+        const weekStart = getWeekStart(currentDate);
+        const targetDate = new Date(weekStart);
+        targetDate.setDate(weekStart.getDate() + dayIndex);
+        openAllDayCreateModal(targetDate);
+      } catch (error) {
+        console.error('Error in week all-day column handler:', error);
+        showMessage('終日イベントの作成に失敗しました。', 'error', 3000);
+      }
+    };
+    eventListeners.add(column, 'click', handler);
   });
 
   const weekHeaderCells = document.querySelectorAll('#weekView .week-header .day-header-cell');
   const handleWeekHeaderSelect = (dayIndex) => {
-    const weekStart = getWeekStart(currentDate);
-    const targetDate = new Date(weekStart);
-    targetDate.setDate(weekStart.getDate() + dayIndex);
-    currentDate = targetDate;
-    currentView = 'day';
-    switchView('day');
-    updateViews();
+    try {
+      const weekStart = getWeekStart(currentDate);
+      const targetDate = new Date(weekStart);
+      targetDate.setDate(weekStart.getDate() + dayIndex);
+      currentDate = targetDate;
+      currentView = 'day';
+      switchView('day');
+      updateViews();
+    } catch (error) {
+      console.error('Error in handleWeekHeaderSelect:', error);
+      showMessage('日付の選択に失敗しました。', 'error', 3000);
+    }
   };
   weekHeaderCells.forEach((cell) => {
     const dayIndex = Number(cell.dataset.day || 0);
-    cell.addEventListener('click', () => handleWeekHeaderSelect(dayIndex));
-    cell.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        handleWeekHeaderSelect(dayIndex);
+    const clickHandler = () => handleWeekHeaderSelect(dayIndex);
+    const keypressHandler = (e) => {
+      try {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleWeekHeaderSelect(dayIndex);
+        }
+      } catch (error) {
+        console.error('Error in week header keypress handler:', error);
       }
-    });
+    };
+    eventListeners.add(cell, 'click', clickHandler);
+    eventListeners.add(cell, 'keypress', keypressHandler);
   });
 
   if (allDayStartInput) {
-    allDayStartInput.addEventListener('change', () => {
-      if (!allDayEndInput || !allDayStartInput.value) return;
-      if (!allDayEndInput.value || new Date(allDayEndInput.value) < new Date(allDayStartInput.value)) {
-        allDayEndInput.value = allDayStartInput.value;
+    const handler = () => {
+      try {
+        if (!allDayEndInput || !allDayStartInput.value) return;
+        if (!allDayEndInput.value || new Date(allDayEndInput.value) < new Date(allDayStartInput.value)) {
+          allDayEndInput.value = allDayStartInput.value;
+        }
+      } catch (error) {
+        console.error('Error in allDayStartInput handler:', error);
       }
-    });
+    };
+    eventListeners.add(allDayStartInput, 'change', handler);
   }
   
   // モーダル関連
   const closeModalBtn = safeGetElementById('closeModal');
   if (closeModalBtn) {
-    closeModalBtn.addEventListener('click', closeEventModal);
+    eventListeners.add(closeModalBtn, 'click', closeEventModal);
   }
   
   // モーダル外クリックで閉じる
   const eventModal = safeGetElementById('eventModal');
   if (eventModal) {
-    eventModal.addEventListener('click', (e) => {
-      if (e.target.id === 'eventModal') {
-        closeEventModal();
+    const handler = (e) => {
+      try {
+        if (e.target.id === 'eventModal') {
+          closeEventModal();
+        }
+      } catch (error) {
+        console.error('Error in eventModal click handler:', error);
       }
-    });
+    };
+    eventListeners.add(eventModal, 'click', handler);
   }
   
   // ESCキーでモーダルを閉じる
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      const modal = safeGetElementById('eventModal');
-      if (modal && modal.classList.contains('show')) {
-        closeEventModal();
+  const escHandler = (e) => {
+    try {
+      if (e.key === 'Escape') {
+        const modal = safeGetElementById('eventModal');
+        if (modal && modal.classList.contains('show')) {
+          closeEventModal();
+        }
       }
+    } catch (error) {
+      console.error('Error in ESC key handler:', error);
     }
-  });
+  };
+  eventListeners.add(document, 'keydown', escHandler);
   
   // フォーム送信
   const eventForm = safeGetElementById('eventForm');
@@ -3102,7 +3237,7 @@ function setupEventListeners() {
     return;
   }
   
-  eventForm.addEventListener('submit', async (e) => {
+  const submitHandler = async (e) => {
     e.preventDefault();
     
     // Prevent double submission
@@ -3236,12 +3371,13 @@ function setupEventListeners() {
       // Reset submission flag
       delete eventForm.dataset.submitting;
     }
-  });
+  };
+  eventListeners.add(eventForm, 'submit', submitHandler);
   
   // 削除ボタン
   const deleteBtn = safeGetElementById('deleteBtn');
   if (deleteBtn) {
-    deleteBtn.addEventListener('click', async () => {
+    const deleteHandler = async () => {
       if (!editingEventId) return;
       
       const confirmed = await showConfirmModal('この予定を削除してもよろしいですか？', '削除の確認');
@@ -3258,21 +3394,27 @@ function setupEventListeners() {
           showMessage('イベントの削除に失敗しました。', 'error', 6000);
         }
       }
-    });
+    };
+    eventListeners.add(deleteBtn, 'click', deleteHandler);
   }
   
   // 繰り返し選択時の処理
   const recurrenceSelect = safeGetElementById('eventRecurrence');
   const recurrenceEndGroup = safeGetElementById('recurrenceEndGroup');
   if (recurrenceSelect && recurrenceEndGroup) {
-    recurrenceSelect.addEventListener('change', () => {
+    const handler = () => {
+      try {
       const value = recurrenceSelect.value;
       if (value && value !== 'none') {
         recurrenceEndGroup.classList.remove('hidden');
       } else {
         recurrenceEndGroup.classList.add('hidden');
       }
-    });
+      } catch (error) {
+        console.error('Error in recurrenceSelect handler:', error);
+      }
+    };
+    eventListeners.add(recurrenceSelect, 'change', handler);
   }
 }
 
