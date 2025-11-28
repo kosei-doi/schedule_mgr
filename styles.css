@@ -89,6 +89,19 @@ body {
   position: sticky;
   top: 0;
   z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 2.5vw, 1.25rem);
+}
+
+.header-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.header-icon svg {
+  display: block;
 }
 
 .notification {
@@ -133,6 +146,8 @@ body {
   align-items: center;
   flex-wrap: wrap;
   gap: clamp(1rem, 2.5vw, 1.25rem);
+  flex: 1;
+  min-width: 0;
 }
 
 .date-navigation {
