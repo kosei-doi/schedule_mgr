@@ -114,26 +114,13 @@ const GOOGLE_APPS_SCRIPT_ENDPOINT =
   'https://script.google.com/macros/s/AKfycbyBvGKQYGvGG7qKlwqXcWbF90kkiXOHAGieu4RJCH2-DNb1hr0bIpvhpkCjot9Ub59bxA/exec';
 
 function showMessage(message, type = 'info', duration = 4000) {
-  const area = safeGetElementById('notificationArea');
-  if (!area) {
-    if (type === 'error') {
-      console.error(message);
-    } else {
-      console.info(message);
-    }
-    return;
+  // 通知表示を無効化（ヘッダー下の通知は表示しない）
+  // エラーのみコンソールに出力
+  if (type === 'error') {
+    console.error(message);
   }
-  area.textContent = message;
-  area.className = `notification show${type !== 'info' ? ' ' + type : ''}`;
-  if (messageTimeoutId) {
-    clearTimeout(messageTimeoutId);
-  }
-  if (duration > 0) {
-    messageTimeoutId = setTimeout(() => {
-      area.className = 'notification';
-      area.textContent = '';
-    }, duration);
-  }
+  // 通知エリアは表示しない
+  return;
 }
 
 // 確認モーダルを表示
@@ -155,12 +142,16 @@ function showConfirmModal(message, title = '確認') {
     messageEl.textContent = message;
     modal.classList.add('show');
     modal.setAttribute('aria-hidden', 'false');
+    // モバイル版でスクロールバーが出ないようにbodyのoverflowを制御（CSSクラスのみで制御）
+    document.body.classList.add('modal-open');
     
     let escHandler = null;
     
     const cleanup = () => {
       modal.classList.remove('show');
       modal.setAttribute('aria-hidden', 'true');
+      // bodyのoverflowを元に戻す
+      document.body.classList.remove('modal-open');
       okBtn.removeEventListener('click', handleOk);
       cancelBtn.removeEventListener('click', handleCancel);
       modal.removeEventListener('click', handleBackdrop);
@@ -2043,6 +2034,8 @@ function showEventModal(eventId = null) {
   if (modal) {
     modal.classList.add('show');
     modal.setAttribute('aria-hidden', 'false');
+    // モバイル版でスクロールバーが出ないようにbodyのoverflowを制御（CSSクラスのみで制御）
+    document.body.classList.add('modal-open');
   }
 }
 
@@ -2052,6 +2045,8 @@ function closeEventModal() {
   if (modal) {
     modal.classList.remove('show');
     modal.setAttribute('aria-hidden', 'true');
+    // bodyのoverflowを元に戻す（CSSクラスのみで制御）
+    document.body.classList.remove('modal-open');
   }
   
   // 一時的イベントの場合は削除
@@ -3765,19 +3760,31 @@ function attachResizeHandlers() {
     }
 
     async function onMouseUp(e) {
+      // イベントリスナーを確実に削除（{once: true}を使用しているが、念のため削除）
       document.removeEventListener('mousemove', onMouseMove);
       item.classList.remove('resizing', 'dragging');
+      
+      // 状態を保存（リセット前に）
+      const currentResizing = resizing;
+      const currentStartY = startY;
+      
+      // 状態をリセット
+      resizing = null;
+      startY = 0;
+      originalStart = null;
+      originalEnd = null;
+      originalTop = 0;
 
       const hourHeight = getHourHeight();
-      const dy = e.clientY - startY;
+      const dy = e.clientY - currentStartY;
       const minutesDelta = Math.round(dy / hourHeight * 60 / 15) * 15; // 15分単位に丸める
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
-      console.log('イベント移動終了:', ev.title, 'resizing:', resizing, 'minutesDelta:', minutesDelta);
+      console.log('イベント移動終了:', ev.title, 'resizing:', currentResizing, 'minutesDelta:', minutesDelta);
 
       // クリック（移動なし）は詳細モーダルを開く
-      if (resizing === 'move' && minutesDelta === 0) {
+      if (currentResizing === 'move' && minutesDelta === 0) {
         showEventModal(id);
         return;
       }
@@ -3787,21 +3794,21 @@ function attachResizeHandlers() {
       let newEndTime = ev.endTime;
       
       // モバイルではリサイズを無効化
-      if (isMobile && (resizing === 'top' || resizing === 'bottom')) {
+      if (isMobile && (currentResizing === 'top' || currentResizing === 'bottom')) {
         return; // リサイズ操作は無視
       }
       
-      if (resizing === 'top') {
+      if (currentResizing === 'top') {
         const newStart = new Date(new Date(ev.startTime).getTime() + minutesDelta * 60000);
         if (newStart < new Date(ev.endTime)) {
           newStartTime = formatDateTimeLocal(newStart);
         }
-      } else if (resizing === 'bottom') {
+      } else if (currentResizing === 'bottom') {
         const newEnd = new Date(new Date(ev.endTime).getTime() + minutesDelta * 60000);
         if (newEnd > new Date(ev.startTime)) {
           newEndTime = formatDateTimeLocal(newEnd);
         }
-      } else if (resizing === 'move') {
+      } else if (currentResizing === 'move') {
         // ドラッグ移動の処理
         const newStart = new Date(new Date(ev.startTime).getTime() + minutesDelta * 60000);
         const newEnd = new Date(new Date(ev.endTime).getTime() + minutesDelta * 60000);
@@ -3838,21 +3845,33 @@ function attachResizeHandlers() {
     }
 
     async function onTouchEnd(e) {
+      // イベントリスナーを確実に削除（{once: true}を使用しているが、念のため削除）
       document.removeEventListener('touchmove', onTouchMove);
       item.classList.remove('resizing', 'dragging');
+      
+      // 状態を保存（リセット前に）
+      const currentResizing = resizing;
+      const currentStartY = startY;
+      
+      // 状態をリセット
+      resizing = null;
+      startY = 0;
+      originalStart = null;
+      originalEnd = null;
+      originalTop = 0;
 
       if (!e.changedTouches || e.changedTouches.length === 0) return;
       const hourHeight = getHourHeight();
       const touch = e.changedTouches[0];
-      const dy = touch.clientY - startY;
+      const dy = touch.clientY - currentStartY;
       const minutesDelta = Math.round(dy / hourHeight * 60 / 15) * 15; // 15分単位に丸める
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
-      console.log('タッチ移動終了:', ev.title, 'resizing:', resizing, 'minutesDelta:', minutesDelta);
+      console.log('タッチ移動終了:', ev.title, 'resizing:', currentResizing, 'minutesDelta:', minutesDelta);
 
       // クリック（移動なし）は詳細モーダルを開く
-      if (resizing === 'move' && minutesDelta === 0) {
+      if (currentResizing === 'move' && minutesDelta === 0) {
         showEventModal(id);
         return;
       }
@@ -3861,13 +3880,15 @@ function attachResizeHandlers() {
       let newStartTime = ev.startTime;
       let newEndTime = ev.endTime;
       
-      if (resizing === 'move') {
+      if (currentResizing === 'move') {
         // ドラッグ移動の処理
         const newStart = new Date(new Date(ev.startTime).getTime() + minutesDelta * 60000);
         const newEnd = new Date(new Date(ev.endTime).getTime() + minutesDelta * 60000);
         
-        // 0時より前には移動できない
-        if (newStart.getHours() >= 0) {
+        // 0時より前には移動できない（VISIBLE_START_HOURを考慮）
+        const newStartMinutes = newStart.getHours() * 60 + newStart.getMinutes();
+        const minAllowedMinutes = VISIBLE_START_HOUR * 60;
+        if (newStartMinutes >= minAllowedMinutes) {
           newStartTime = formatDateTimeLocal(newStart);
           newEndTime = formatDateTimeLocal(newEnd);
         }
@@ -3895,10 +3916,41 @@ function attachResizeHandlers() {
       }
     }
 
+    // 既存のイベントリスナーを削除（重複登録を防ぐ）
+    const existingMouseDown = item._existingMouseDown;
+    const existingTouchStart = item._existingTouchStart;
+    const existingTopHandleMouseDown = topHandle?._existingMouseDown;
+    const existingBottomHandleMouseDown = bottomHandle?._existingMouseDown;
+    
+    if (existingMouseDown) {
+      item.removeEventListener('mousedown', existingMouseDown);
+    }
+    if (existingTouchStart) {
+      item.removeEventListener('touchstart', existingTouchStart);
+    }
+    if (existingTopHandleMouseDown && topHandle) {
+      topHandle.removeEventListener('mousedown', existingTopHandleMouseDown);
+    }
+    if (existingBottomHandleMouseDown && bottomHandle) {
+      bottomHandle.removeEventListener('mousedown', existingBottomHandleMouseDown);
+    }
+    
+    // 新しいイベントリスナーを保存
+    item._existingMouseDown = onEventMouseDown;
+    item._existingTouchStart = onEventTouchStart;
+    
     // モバイルではリサイズハンドルのイベントリスナーを追加しない
     if (!isMobile) {
-      topHandle.addEventListener('mousedown', onMouseDown(topHandle, 'top'));
-      bottomHandle.addEventListener('mousedown', onMouseDown(bottomHandle, 'bottom'));
+      const topHandler = onMouseDown(topHandle, 'top');
+      const bottomHandler = onMouseDown(bottomHandle, 'bottom');
+      if (topHandle) {
+        topHandle._existingMouseDown = topHandler;
+        topHandle.addEventListener('mousedown', topHandler);
+      }
+      if (bottomHandle) {
+        bottomHandle._existingMouseDown = bottomHandler;
+        bottomHandle.addEventListener('mousedown', bottomHandler);
+      }
     }
     
     // イベント本体のドラッグ移動イベントリスナーを追加
