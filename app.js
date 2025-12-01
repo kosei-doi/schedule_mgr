@@ -232,7 +232,7 @@ function checkFirebase() {
   return false;
 }
 
-// 特定のイベントが影響するビューだけを更新
+// 特定のイベントが影響するビューだけを更新（日を跨ぐイベントも考慮）
 function updateViewsForEvent(event) {
   if (!event || !event.id) return;
   
@@ -250,35 +250,75 @@ function updateViewsForEvent(event) {
     return;
   }
   
-  // イベントが表示される日付を計算
-  const eventDate = event.startTime ? new Date(event.startTime.split('T')[0]) : null;
-  if (!eventDate || Number.isNaN(eventDate.getTime())) {
+  // イベントの開始日と終了日を計算
+  let eventStartDate = null;
+  let eventEndDate = null;
+  
+  if (event.startTime) {
+    if (isAllDayEvent(event)) {
+      // 終日イベントの場合
+      eventStartDate = new Date(event.startTime.split('T')[0]);
+      eventEndDate = event.endTime ? new Date(event.endTime.split('T')[0]) : eventStartDate;
+    } else {
+      // 時間指定イベントの場合
+      eventStartDate = new Date(event.startTime);
+      eventEndDate = event.endTime ? new Date(event.endTime) : eventStartDate;
+    }
+  }
+  
+  if (!eventStartDate || Number.isNaN(eventStartDate.getTime())) {
     updateViews();
     return;
   }
   
-  // 日次ビュー: 該当日だけ更新
+  if (!eventEndDate || Number.isNaN(eventEndDate.getTime())) {
+    eventEndDate = eventStartDate;
+  }
+  
+  // 日次ビュー: イベントが含まれる日をチェック
   if (currentView === 'day') {
-    const dayStr = formatDate(currentDate, 'YYYY-MM-DD');
-    const eventDayStr = formatDate(eventDate, 'YYYY-MM-DD');
-    if (dayStr === eventDayStr) {
+    const currentDay = new Date(currentDate);
+    currentDay.setHours(0, 0, 0, 0);
+    const currentDayEnd = new Date(currentDay);
+    currentDayEnd.setHours(23, 59, 59, 999);
+    
+    // イベントの期間と現在の日が重なるかチェック
+    if (eventStartDate <= currentDayEnd && eventEndDate >= currentDay) {
       renderDayView();
     }
   }
-  // 週次ビュー: 該当週だけ更新
+  // 週次ビュー: イベントが含まれる週をチェック
   else if (currentView === 'week') {
     const weekStart = getWeekStart(currentDate);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 6);
-    if (eventDate >= weekStart && eventDate <= weekEnd) {
+    weekEnd.setHours(23, 59, 59, 999);
+    
+    // イベントの期間と現在の週が重なるかチェック
+    if (eventStartDate <= weekEnd && eventEndDate >= weekStart) {
       renderWeekView();
     }
   }
-  // 月次ビュー: 該当月だけ更新
+  // 月次ビュー: イベントが含まれる月をチェック
   else if (currentView === 'month') {
     const currentMonth = currentDate.getMonth();
     const currentYear = currentDate.getFullYear();
-    if (eventDate.getMonth() === currentMonth && eventDate.getFullYear() === currentYear) {
+    
+    // イベントの開始月と終了月を取得
+    const eventStartMonth = eventStartDate.getMonth();
+    const eventStartYear = eventStartDate.getFullYear();
+    const eventEndMonth = eventEndDate.getMonth();
+    const eventEndYear = eventEndDate.getFullYear();
+    
+    // イベントが現在の月と重なるかチェック
+    const eventStartsInMonth = eventStartYear === currentYear && eventStartMonth === currentMonth;
+    const eventEndsInMonth = eventEndYear === currentYear && eventEndMonth === currentMonth;
+    const eventSpansMonth = (
+      (eventStartYear < currentYear || (eventStartYear === currentYear && eventStartMonth < currentMonth)) &&
+      (eventEndYear > currentYear || (eventEndYear === currentYear && eventEndMonth > currentMonth))
+    );
+    
+    if (eventStartsInMonth || eventEndsInMonth || eventSpansMonth) {
       renderMonthView();
     }
   }
@@ -525,8 +565,28 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
   const filteredUpserts = Array.isArray(upserts)
     ? upserts.filter(ev => ev && ev.id && ev.isTimetable !== true)
     : [];
+  // 削除はIDまたはイベントオブジェクトを受け取る
   const filteredDeletes = Array.isArray(deletes)
-    ? deletes.filter(id => typeof id === 'string' && id.trim().length > 0)
+    ? deletes
+        .filter(item => {
+          if (typeof item === 'string') return item.trim().length > 0;
+          if (item && typeof item === 'object' && item.id) return true;
+          return false;
+        })
+        .map(item => {
+          // 文字列の場合はそのまま、オブジェクトの場合はIDとイベント情報を含める
+          if (typeof item === 'string') {
+            return item;
+          }
+          // イベントオブジェクトの場合は、IDと日付・タイトル情報を含める
+          return {
+            id: item.id,
+            title: item.title || '',
+            startTime: item.startTime || null,
+            endTime: item.endTime || null,
+            allDay: item.allDay === true,
+          };
+        })
     : [];
 
   if (filteredUpserts.length === 0 && filteredDeletes.length === 0) {
@@ -1333,8 +1393,9 @@ async function deleteEvent(id, options = {}) {
 
   if (syncGoogle && existingEvent?.isTimetable !== true) {
     try {
+      // 削除時にイベント情報（日付とタイトル）も送信して、IDが一致しない場合でもマッチングできるようにする
       await mirrorMutationsToGoogle({
-        deletes: [id],
+        deletes: existingEvent ? [existingEvent] : [id],
         silent: true,
       });
     } catch (error) {
@@ -1353,8 +1414,8 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
     if (!confirmed) return false;
   }
 
-  const deletableIds = Array.isArray(events)
-    ? events.filter(ev => ev?.id && ev.isTimetable !== true).map(ev => ev.id)
+  const deletableEvents = Array.isArray(events)
+    ? events.filter(ev => ev?.id && ev.isTimetable !== true)
     : [];
 
   try {
@@ -1371,9 +1432,10 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
     updateViews();
     clearScheduledNotifications();
 
-    if (deletableIds.length > 0) {
+    if (deletableEvents.length > 0) {
       try {
-        await mirrorMutationsToGoogle({ deletes: deletableIds, silent: true });
+        // 削除時にイベント情報（日付とタイトル）も送信して、IDが一致しない場合でもマッチングできるようにする
+        await mirrorMutationsToGoogle({ deletes: deletableEvents, silent: true });
       } catch (error) {
         console.error('Googleカレンダーからの一括削除に失敗しました。', error);
       }
@@ -1446,23 +1508,55 @@ function stopAutomaticGoogleSync() {
   }
 }
 
-// 特定日のイベントを取得
+// 特定日のイベントを取得（日を跨ぐイベントも含む）
 function getEventsByDate(date) {
   const dateStr = formatDate(date, 'YYYY-MM-DD');
+  const targetDate = new Date(date);
+  targetDate.setHours(0, 0, 0, 0);
+  const targetDateEnd = new Date(targetDate);
+  targetDateEnd.setHours(23, 59, 59, 999);
+  
   const list = [];
   if (!Array.isArray(events)) return list;
+  
   events.forEach(ev => {
     if (!ev.recurrence || ev.recurrence === 'none') {
       if (!ev.startTime) return;
-      const eventDate = ev.startTime.split('T')[0];
-      if (eventDate === dateStr) list.push(ev);
+      
+      // 終日イベントの場合
+      if (isAllDayEvent(ev)) {
+        const eventStartDate = ev.startTime.split('T')[0];
+        const eventEndDate = ev.endTime ? ev.endTime.split('T')[0] : eventStartDate;
+        
+        // 指定日がイベントの開始日から終了日（含む）の間にあるかチェック
+        if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
+          list.push(ev);
+        }
+        return;
+      }
+      
+      // 時間指定イベントの場合
+      const eventStart = new Date(ev.startTime);
+      const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
+      
+      if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
+      
+      // 指定日の0時から23:59:59までの期間とイベントの期間が重なるかチェック
+      // イベントが指定日の前日から始まって指定日に終わる、または
+      // イベントが指定日に始まって指定日の翌日に終わる、または
+      // イベントが指定日を含む期間に完全に含まれる
+      if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
+        list.push(ev);
+      }
       return;
     }
+    
     // 繰り返し展開（簡易）
     if (!ev.startTime || !ev.endTime) return;
     const start = new Date(ev.startTime);
     const end = new Date(ev.endTime);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+    
     // recurrenceEnd is a date-only string (YYYY-MM-DD), append time if needed
     const recurEnd = ev.recurrenceEnd 
       ? new Date(ev.recurrenceEnd.includes('T') ? ev.recurrenceEnd : ev.recurrenceEnd + 'T23:59:59')
@@ -1470,37 +1564,64 @@ function getEventsByDate(date) {
     const target = new Date(date);
     target.setHours(start.getHours(), start.getMinutes(), 0, 0);
     if (recurEnd && !Number.isNaN(recurEnd.getTime()) && target > recurEnd) return;
+    
     const matches = (
       ev.recurrence === 'daily' ||
       (ev.recurrence === 'weekly' && target.getDay() === start.getDay()) ||
       (ev.recurrence === 'monthly' && target.getDate() === start.getDate())
     );
+    
     if (matches && target >= start) {
       const inst = { ...ev };
       const duration = end.getTime() - start.getTime();
       if (duration > 0) {
         inst.startTime = formatDateTimeLocal(target);
         inst.endTime = formatDateTimeLocal(new Date(target.getTime() + duration));
-        list.push(inst);
+        
+        // 繰り返しイベントも日を跨ぐ可能性があるので、同様にチェック
+        const instStart = new Date(inst.startTime);
+        const instEnd = new Date(inst.endTime);
+        if (instStart <= targetDateEnd && instEnd >= targetDate) {
+          list.push(inst);
+        }
       }
     }
   });
   return list;
 }
 
-// 特定週のイベントを取得
+// 特定週のイベントを取得（週を跨ぐイベントも含む）
 function getEventsByWeek(startDate) {
-  const endDate = new Date(startDate);
-  endDate.setDate(endDate.getDate() + 6);
-  endDate.setHours(23, 59, 59, 999);
+  const weekStart = new Date(startDate);
+  weekStart.setHours(0, 0, 0, 0);
+  const weekEnd = new Date(startDate);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
   
   if (!Array.isArray(events)) return [];
   
   return events.filter(event => {
     if (!event || !event.startTime) return false;
-    const eventDate = new Date(event.startTime);
-    if (Number.isNaN(eventDate.getTime())) return false;
-    return eventDate >= startDate && eventDate <= endDate;
+    
+    // 終日イベントの場合
+    if (isAllDayEvent(event)) {
+      const eventStartDate = event.startTime.split('T')[0];
+      const eventEndDate = event.endTime ? event.endTime.split('T')[0] : eventStartDate;
+      const weekStartStr = formatDate(weekStart, 'YYYY-MM-DD');
+      const weekEndStr = formatDate(weekEnd, 'YYYY-MM-DD');
+      
+      // イベントの期間と週の期間が重なるかチェック
+      return eventStartDate <= weekEndStr && eventEndDate >= weekStartStr;
+    }
+    
+    // 時間指定イベントの場合
+    const eventStart = new Date(event.startTime);
+    const eventEnd = event.endTime ? new Date(event.endTime) : new Date(eventStart);
+    
+    if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return false;
+    
+    // イベントの期間と週の期間が重なるかチェック
+    return eventStart <= weekEnd && eventEnd >= weekStart;
   });
 }
 
@@ -1546,7 +1667,7 @@ function renderDayView() {
 
   syncEventElements(container, sortedTimed, viewCaches.day.timed, {
     positionEvent: (element, event) => {
-      positionEventInDayView(element, event);
+      positionEventInDayView(element, event, currentDate);
       applyOverlapStyles(element, groupMap.get(event.id));
     },
   });
@@ -1622,7 +1743,7 @@ function renderWeekView() {
     
     syncEventElements(eventsContainer, sortedTimed, viewCaches.week.timed[i], {
       positionEvent: (element, event) => {
-        positionEventInDayView(element, event);
+        positionEventInDayView(element, event, dayDate);
         applyOverlapStyles(element, groupMap.get(event.id));
       },
     });
@@ -1803,7 +1924,8 @@ function syncEventElements(container, events, cacheMap, { variant, positionEvent
 }
 
 // 日次ビューでのイベント配置
-function positionEventInDayView(element, event) {
+// 日次ビューでのイベント位置計算（日を跨ぐイベントも考慮）
+function positionEventInDayView(element, event, targetDate = null) {
   if (isAllDayEvent(event)) {
     element.style.position = 'relative';
     element.style.top = '';
@@ -1826,6 +1948,26 @@ function positionEventInDayView(element, event) {
     return;
   }
   
+  // 対象日の0時と23:59:59を取得（週次ビューでは各日、日次ビューではcurrentDate）
+  const displayDate = targetDate || currentDate;
+  const currentDay = new Date(displayDate);
+  currentDay.setHours(0, 0, 0, 0);
+  const currentDayEnd = new Date(currentDay);
+  currentDayEnd.setHours(23, 59, 59, 999);
+  
+  // イベントの表示範囲を現在の日に制限
+  // 日を跨ぐイベントの場合、現在の日の範囲内の部分だけを表示
+  const displayStart = startTime < currentDay ? currentDay : startTime;
+  const displayEnd = endTime > currentDayEnd ? currentDayEnd : endTime;
+  
+  // 表示範囲が現在の日と重ならない場合は何も表示しない
+  if (displayStart >= currentDayEnd || displayEnd <= currentDay) {
+    element.style.display = 'none';
+    return;
+  }
+  
+  element.style.display = '';
+  
   // 時間スロットの実際の高さを取得
   const hourHeight = getHourHeight();
   
@@ -1834,13 +1976,18 @@ function positionEventInDayView(element, event) {
   // タイトルと時間の両方を表示するための最低高さ（1.5時間分）
   const MIN_HEIGHT_FOR_TIME = hourHeight * 1.5;
   
-  const startMinutesTotal = startTime.getHours() * 60 + startTime.getMinutes();
-  const endMinutesTotal = endTime.getHours() * 60 + endTime.getMinutes();
+  // 表示開始時刻と終了時刻を分単位で計算
+  const displayStartMinutesTotal = displayStart.getHours() * 60 + displayStart.getMinutes();
+  const displayEndMinutesTotal = displayEnd.getHours() * 60 + displayEnd.getMinutes();
   const visibleStartMinutes = VISIBLE_START_HOUR * 60;
   const visibleEndMinutes = (VISIBLE_END_HOUR + 1) * 60;
 
-  const startMinutesFromVisible = Math.max(0, startMinutesTotal - visibleStartMinutes);
-  const endMinutesFromVisible = Math.max(startMinutesFromVisible + 15, Math.min(visibleEndMinutes - visibleStartMinutes, endMinutesTotal - visibleStartMinutes));
+  // 表示可能な範囲内での開始位置と終了位置を計算
+  const startMinutesFromVisible = Math.max(0, displayStartMinutesTotal - visibleStartMinutes);
+  const endMinutesFromVisible = Math.max(
+    startMinutesFromVisible + 15, 
+    Math.min(visibleEndMinutes - visibleStartMinutes, displayEndMinutesTotal - visibleStartMinutes)
+  );
 
   const top = (startMinutesFromVisible / 60) * hourHeight;
   const calculatedHeight = (endMinutesFromVisible - startMinutesFromVisible) / 60 * hourHeight;
@@ -1978,14 +2125,21 @@ function showEventModal(eventId = null) {
     if (modalTitle) modalTitle.textContent = '新しい予定';
     if (deleteBtn) deleteBtn.style.display = 'none';
     
+    // すべてのフィールドをクリア（タイトル、説明、色など）
+    const titleInput = safeGetElementById('eventTitle');
+    const descInput = safeGetElementById('eventDescription');
+    if (titleInput) titleInput.value = '';
+    if (descInput) descInput.value = '';
+    
+    // 色をデフォルト（青）にリセット
+    const defaultColorRadio = document.querySelector('input[name="color"][value="#3b82f6"]');
+    if (defaultColorRadio) defaultColorRadio.checked = true;
+    
     // 一時的イベントの場合は既存の値を保持
     if (eventId && typeof eventId === 'string' && eventId.startsWith('temp-')) {
       if (!Array.isArray(events)) return;
       const event = events.find(e => e.id === eventId);
       if (event) {
-        const titleInput = safeGetElementById('eventTitle');
-        const descInput = safeGetElementById('eventDescription');
-        if (titleInput) titleInput.value = '';
         if (descInput) descInput.value = event.description || '';
         if (startInput) startInput.value = toDateTimeLocalValue(event.startTime);
         if (endInput) endInput.value = toDateTimeLocalValue(event.endTime);
@@ -2408,12 +2562,31 @@ function logAllowedRanges(label) {
   );
 }
 
+// イベントが許可された範囲内にあるかチェック（日を跨ぐイベントも考慮）
 function isEventInAllowedRange(event, ranges) {
   if (!event || !event.startTime) return false;
-  const eventDate = new Date(event.startTime);
-  if (Number.isNaN(eventDate.getTime())) return false;
+  
   const { rangeStart, rangeEnd } = ranges || getAllowedDateRanges();
-  return eventDate >= rangeStart && eventDate <= rangeEnd;
+  
+  // 終日イベントの場合
+  if (isAllDayEvent(event)) {
+    const eventStartDate = new Date(event.startTime.split('T')[0]);
+    const eventEndDate = event.endTime ? new Date(event.endTime.split('T')[0]) : eventStartDate;
+    
+    if (Number.isNaN(eventStartDate.getTime()) || Number.isNaN(eventEndDate.getTime())) return false;
+    
+    // イベントの期間と許可範囲が重なるかチェック
+    return eventStartDate <= rangeEnd && eventEndDate >= rangeStart;
+  }
+  
+  // 時間指定イベントの場合
+  const eventStart = new Date(event.startTime);
+  const eventEnd = event.endTime ? new Date(event.endTime) : eventStart;
+  
+  if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return false;
+  
+  // イベントの期間と許可範囲が重なるかチェック
+  return eventStart <= rangeEnd && eventEnd >= rangeStart;
 }
 
 // 通知スケジュール
@@ -3541,7 +3714,11 @@ function openAllDayCreateModal(date) {
   const allDayRow = safeGetElementById('allDayDateRow');
   const allDayStartInput = safeGetElementById('eventAllDayStart');
   const allDayEndInput = safeGetElementById('eventAllDayEnd');
+  
+  // 新規作成モードでモーダルを開く（フォームがクリアされる）
   showEventModal();
+  
+  // 終日モードを設定
   if (allDayCheckbox) {
     allDayCheckbox.checked = true;
   }
@@ -3550,8 +3727,16 @@ function openAllDayCreateModal(date) {
     endInput: safeGetElementById('eventEndTime'),
     allDayRow,
   });
+  
+  // 終日イベントの日付を設定
   if (allDayStartInput) allDayStartInput.value = isoDate;
   if (allDayEndInput) allDayEndInput.value = isoDate;
+  
+  // 念のため、タイトルと説明を明示的にクリア（前回の値が残らないように）
+  const titleInput = safeGetElementById('eventTitle');
+  const descInput = safeGetElementById('eventDescription');
+  if (titleInput) titleInput.value = '';
+  if (descInput) descInput.value = '';
 }
 
 // 週次グリッドでのクリック作成（クリック位置の時間で1時間の予定をモーダルで作成）

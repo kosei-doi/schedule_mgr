@@ -154,17 +154,95 @@ function processMutations(calendar, payload) {
     created += 1;
   });
 
-  deletes.forEach((rawId) => {
-    const scheduleId = typeof rawId === 'string' ? rawId.trim() : '';
-    if (!scheduleId) return;
-    const eventEntry = existingMap.get(scheduleId);
+  deletes.forEach((rawDeleteItem) => {
+    let scheduleId = null;
+    let deleteTitle = null;
+    let deleteStartDate = null;
+    let isAllDay = false;
+    
+    // 削除アイテムが文字列（IDのみ）の場合
+    if (typeof rawDeleteItem === 'string') {
+      scheduleId = rawDeleteItem.trim();
+      if (!scheduleId) return;
+    }
+    // 削除アイテムがオブジェクト（ID + イベント情報）の場合
+    else if (rawDeleteItem && typeof rawDeleteItem === 'object') {
+      scheduleId = (rawDeleteItem.id || '').trim();
+      deleteTitle = (rawDeleteItem.title || '').trim();
+      deleteStartDate = rawDeleteItem.startTime ? new Date(rawDeleteItem.startTime) : null;
+      isAllDay = Boolean(rawDeleteItem.allDay);
+      
+      if (!scheduleId && !deleteTitle) return;
+    } else {
+      return;
+    }
+    
+    // まずIDでマッチングを試みる
+    let eventEntry = scheduleId ? existingMap.get(scheduleId) : null;
+    
+    // IDでマッチングできない場合、日付とタイトルでマッチングを試みる
+    if (!eventEntry && deleteTitle && deleteStartDate && !Number.isNaN(deleteStartDate.getTime())) {
+      // 削除対象の日付を正規化（日付部分のみで比較）
+      const targetDate = new Date(deleteStartDate);
+      targetDate.setHours(0, 0, 0, 0);
+      const targetDateStr = Utilities.formatDate(targetDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      
+      // 既存のイベントから、IDでマッチングできなかったものを検索
+      // 検索範囲は対象日の前後1日（日を跨ぐイベントも考慮）
+      const searchStart = new Date(targetDate);
+      searchStart.setDate(searchStart.getDate() - 1);
+      searchStart.setHours(0, 0, 0, 0);
+      const searchEnd = new Date(targetDate);
+      searchEnd.setDate(searchEnd.getDate() + 1);
+      searchEnd.setHours(23, 59, 59, 999);
+      
+      const allEvents = calendar.getEvents(searchStart, searchEnd, { search: deleteTitle });
+      
+      // タイトルと日付が一致するイベントを探す
+      for (let i = 0; i < allEvents.length; i++) {
+        const event = allEvents[i];
+        
+        // 既にIDでマッチング済みのイベントはスキップ
+        const eventScheduleId = extractScheduleMgrId(event.getDescription() || '');
+        if (eventScheduleId && scheduleId && eventScheduleId === scheduleId) {
+          continue; // 既にIDでマッチング済みなのでスキップ
+        }
+        
+        const eventTitle = (event.getTitle() || '').trim();
+        
+        // タイトルが一致するかチェック（正規化して比較）
+        if (normalizeTitleForComparison(eventTitle) !== normalizeTitleForComparison(deleteTitle)) {
+          continue;
+        }
+        
+        // 日付が一致するかチェック（日付部分のみで比較）
+        let eventStartDate = null;
+        if (event.isAllDayEvent()) {
+          eventStartDate = new Date(event.getAllDayStartDate());
+        } else {
+          eventStartDate = new Date(event.getStartTime());
+        }
+        eventStartDate.setHours(0, 0, 0, 0);
+        const eventDateStr = Utilities.formatDate(eventStartDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        
+        // 日付が一致する場合
+        if (eventDateStr === targetDateStr) {
+          eventEntry = event;
+          break;
+        }
+      }
+    }
+    
+    // マッチしたイベントを削除
     if (eventEntry) {
       try {
         eventEntry.deleteEvent();
-        existingMap.delete(scheduleId);
+        if (scheduleId) {
+          existingMap.delete(scheduleId);
+        }
         deleted += 1;
       } catch (error) {
-        console.error('Failed to delete Google event', scheduleId, error);
+        console.error('Failed to delete Google event', scheduleId || deleteTitle, error);
       }
     }
   });
@@ -368,5 +446,14 @@ function getPrimaryReminderMinutes(event) {
 function toIsoString(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
   return Utilities.formatDate(date, 'UTC', "yyyy-MM-dd'T'HH:mm:ss'Z'");
+}
+
+// タイトル比較用に正規化（空白を除去、小文字に変換）
+function normalizeTitleForComparison(title) {
+  if (!title && title !== 0) return '';
+  return String(title)
+    .trim()
+    .replace(/\s+/g, '') // 全ての空白を除去
+    .toLowerCase();
 }
 
