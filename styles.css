@@ -500,6 +500,67 @@ body {
   opacity: 0.9;
 }
 
+/* イベント詳細パネル（モバイル版の週表示用） */
+.event-detail-panel {
+  position: absolute;
+  left: clamp(2.5rem, 6vw, 3.125rem);
+  right: clamp(0.5rem, 1.2vw, 0.625rem);
+  background: linear-gradient(135deg, var(--bg-primary) 0%, rgba(59, 130, 246, 0.03) 100%);
+  border: 2px solid var(--border-color);
+  border-radius: clamp(0.5rem, 1.2vw, 0.625rem);
+  margin-top: clamp(0.4rem, 1vw, 0.5rem);
+  padding: clamp(1rem, 2.5vw, 1.25rem);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06);
+  z-index: 15;
+  animation: slideDown 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-sizing: border-box;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.event-detail-header {
+  margin-bottom: clamp(1rem, 2.5vw, 1.25rem);
+}
+
+.event-detail-title {
+  font-size: clamp(1rem, 2.5vw, 1.125rem);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 clamp(0.5rem, 1.2vw, 0.625rem) 0;
+  line-height: 1.4;
+  letter-spacing: -0.3px;
+}
+
+.event-detail-time {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.event-detail-actions {
+  display: flex;
+  gap: clamp(0.5rem, 1.2vw, 0.625rem);
+  justify-content: flex-end;
+  padding-top: clamp(0.75rem, 1.8vw, 0.875rem);
+  border-top: 1px solid var(--border-color);
+}
+
+.btn-sm {
+  padding: clamp(0.5rem, 1.2vw, 0.625rem) clamp(1rem, 2.5vw, 1.25rem);
+  font-size: var(--text-sm);
+  min-width: auto;
+  font-weight: 600;
+}
+
 /* 週次ビュー */
 .week-header {
   display: grid;

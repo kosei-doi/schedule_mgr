@@ -1900,13 +1900,45 @@ function bindEventElementInteractions(element) {
   element.addEventListener('click', (e) => {
     e.stopPropagation();
     const id = element.dataset.eventId;
-    if (id) showEventModal(id);
+    if (!id) return;
+    
+    // モバイル版で週表示の場合は詳細表示、それ以外は編集モーダル
+    const isMobile = window.innerWidth <= 640;
+    const isWeekView = currentView === 'week';
+    
+    if (isMobile && isWeekView) {
+      // 既に開いている詳細パネルをクリックした場合は閉じる
+      const existingDetail = document.querySelector(`.event-detail-panel[data-event-id="${id}"]`);
+      if (existingDetail) {
+        closeEventDetailPanel();
+      } else {
+        showEventDetail(id);
+      }
+    } else {
+      showEventModal(id);
+    }
   });
   element.addEventListener('keypress', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       const id = element.dataset.eventId;
-      if (id) showEventModal(id);
+      if (!id) return;
+      
+      // モバイル版で週表示の場合は詳細表示、それ以外は編集モーダル
+      const isMobile = window.innerWidth <= 640;
+      const isWeekView = currentView === 'week';
+      
+      if (isMobile && isWeekView) {
+        // 既に開いている詳細パネルをクリックした場合は閉じる
+        const existingDetail = document.querySelector(`.event-detail-panel[data-event-id="${id}"]`);
+        if (existingDetail) {
+          closeEventDetailPanel();
+        } else {
+          showEventDetail(id);
+        }
+      } else {
+        showEventModal(id);
+      }
     }
   });
 }
@@ -2055,6 +2087,116 @@ function positionEventInDayView(element, event, targetDate = null) {
     }
   }
 }
+
+// イベント詳細を表示（モバイル版の週表示用 - インライン展開）
+function showEventDetail(eventId) {
+  if (!eventId || typeof eventId !== 'string' || eventId.startsWith('temp-')) {
+    return;
+  }
+  
+  if (!Array.isArray(events)) return;
+  const event = events.find(e => e.id === eventId);
+  if (!event) return;
+  
+  // 既に開いている詳細パネルがあれば閉じる
+  const existingDetail = document.querySelector('.event-detail-panel');
+  if (existingDetail) {
+    existingDetail.remove();
+  }
+  
+  // イベント要素を取得
+  const eventElement = document.querySelector(`[data-event-id="${eventId}"]`);
+  if (!eventElement) return;
+  
+  // 詳細パネルを作成
+  const detailPanel = document.createElement('div');
+  detailPanel.className = 'event-detail-panel';
+  detailPanel.dataset.eventId = eventId;
+  
+  // タイトル
+  const title = event.title || '無題の予定';
+  
+  // 時刻情報のみを表示
+  let timeInfo = '';
+  if (isAllDayEvent(event)) {
+    const startDate = event.startTime ? new Date(event.startTime.split('T')[0]) : null;
+    const endDate = event.endTime ? new Date(event.endTime) : null;
+    if (endDate) {
+      endDate.setDate(endDate.getDate() - 1); // 終日イベントのendTimeは翌日の00:00なので1日引く
+    }
+    
+    if (startDate && !Number.isNaN(startDate.getTime())) {
+      const startStr = formatDate(startDate, 'M月D日');
+      if (endDate && !Number.isNaN(endDate.getTime()) && formatDate(endDate, 'YYYY-MM-DD') !== formatDate(startDate, 'YYYY-MM-DD')) {
+        const endStr = formatDate(endDate, 'M月D日');
+        timeInfo = `${startStr} ～ ${endStr} (終日)`;
+      } else {
+        timeInfo = `${startStr} (終日)`;
+      }
+    }
+  } else {
+    const startTime = event.startTime ? formatTime(event.startTime) : '--:--';
+    const endTime = event.endTime ? formatTime(event.endTime) : '--:--';
+    timeInfo = `${startTime} - ${endTime}`;
+  }
+  
+  detailPanel.innerHTML = `
+    <div class="event-detail-header">
+      <h3 class="event-detail-title">${escapeHtml(title)}</h3>
+      <div class="event-detail-time">${timeInfo}</div>
+    </div>
+    <div class="event-detail-actions">
+      <button class="btn btn-primary btn-sm" onclick="window.showEventModalFromDetail('${eventId}')">編集</button>
+      <button class="btn btn-secondary btn-sm" onclick="window.closeEventDetailPanel()">閉じる</button>
+    </div>
+  `;
+  
+  // 週表示のイベントコンテナに挿入（週全体の幅を使うため）
+  const weekEvents = document.querySelector('#weekEvents');
+  const dayEventsContainer = eventElement.closest('.day-events-container');
+  
+  if (weekEvents && dayEventsContainer) {
+    // イベント要素の位置を取得して、詳細パネルの位置を計算
+    const eventRect = eventElement.getBoundingClientRect();
+    const weekEventsRect = weekEvents.getBoundingClientRect();
+    
+    // 詳細パネルをweek-eventsに追加
+    weekEvents.appendChild(detailPanel);
+    
+    // 詳細パネルの位置を設定（イベント要素の下に配置）
+    // スクロール位置を考慮
+    const scrollTop = dayEventsContainer.scrollTop;
+    const topOffset = eventRect.bottom - weekEventsRect.top + scrollTop;
+    detailPanel.style.top = `${topOffset}px`;
+    
+    // スクロールして詳細パネルが見えるように
+    setTimeout(() => {
+      detailPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 50);
+  } else {
+    // フォールバック: 元の方法
+    const parent = eventElement.parentElement;
+    if (parent) {
+      parent.insertBefore(detailPanel, eventElement.nextSibling);
+      setTimeout(() => {
+        detailPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 50);
+    }
+  }
+}
+
+// グローバル関数として定義（onclickから呼び出すため）
+window.showEventModalFromDetail = function(eventId) {
+  closeEventDetailPanel();
+  showEventModal(eventId);
+};
+
+window.closeEventDetailPanel = function() {
+  const detailPanel = document.querySelector('.event-detail-panel');
+  if (detailPanel) {
+    detailPanel.remove();
+  }
+};
 
 // モーダル表示
 function showEventModal(eventId = null) {
@@ -3462,14 +3604,20 @@ function setupEventListeners() {
     };
     eventListeners.add(eventModal, 'click', handler);
   }
-  
+
   // ESCキーでモーダルを閉じる
   const escHandler = (e) => {
     try {
     if (e.key === 'Escape') {
       const modal = safeGetElementById('eventModal');
+      const confirmModal = safeGetElementById('confirmModal');
       if (modal && modal.classList.contains('show')) {
         closeEventModal();
+      } else if (confirmModal && confirmModal.classList.contains('show')) {
+        closeConfirmModal();
+      } else {
+        // 詳細パネルを閉じる
+        closeEventDetailPanel();
       }
     }
     } catch (error) {
@@ -3940,6 +4088,13 @@ function attachResizeHandlers() {
       // リサイズハンドルクリックは除外
       if (e.target.classList.contains('resize-handle')) return;
       
+      // モバイル版で週表示の場合はドラッグ処理をスキップ（詳細パネル表示のため）
+      const isMobile = window.innerWidth <= 640;
+      const isWeekView = currentView === 'week';
+      if (isMobile && isWeekView) {
+        return; // クリックイベントに任せる
+      }
+      
       e.stopPropagation();
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev || ev.isTimetable === true || !ev.startTime || !ev.endTime) return;
@@ -3963,6 +4118,13 @@ function attachResizeHandlers() {
     function onEventTouchStart(e) {
       // リサイズハンドルクリックは除外
       if (e.target.classList.contains('resize-handle')) return;
+      
+      // モバイル版で週表示の場合はドラッグ処理をスキップ（詳細パネル表示のため）
+      const isMobile = window.innerWidth <= 640;
+      const isWeekView = currentView === 'week';
+      if (isMobile && isWeekView) {
+        return; // クリックイベントに任せる
+      }
       
       e.preventDefault(); // スクロールを防ぐ
       e.stopPropagation();
