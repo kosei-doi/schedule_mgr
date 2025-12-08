@@ -258,7 +258,14 @@ function updateViewsForEvent(event) {
     if (isAllDayEvent(event)) {
       // 終日イベントの場合
       eventStartDate = new Date(event.startTime.split('T')[0]);
-      eventEndDate = event.endTime ? new Date(event.endTime.split('T')[0]) : eventStartDate;
+      // 終日イベントのendTimeは翌日の00:00に設定されているため、1日を引いて実際の終了日を取得
+      if (event.endTime) {
+        const endDateObj = new Date(event.endTime);
+        endDateObj.setDate(endDateObj.getDate() - 1);
+        eventEndDate = endDateObj;
+      } else {
+        eventEndDate = eventStartDate;
+      }
     } else {
       // 時間指定イベントの場合
       eventStartDate = new Date(event.startTime);
@@ -1556,7 +1563,13 @@ function getEventsByDate(date) {
       // 終日イベントの場合
       if (isAllDayEvent(ev)) {
         const eventStartDate = ev.startTime.split('T')[0];
-        const eventEndDate = ev.endTime ? ev.endTime.split('T')[0] : eventStartDate;
+        // 終日イベントのendTimeは翌日の00:00に設定されているため、1日を引いて実際の終了日を取得
+        let eventEndDate = eventStartDate;
+        if (ev.endTime) {
+          const endDateObj = new Date(ev.endTime);
+          endDateObj.setDate(endDateObj.getDate() - 1);
+          eventEndDate = formatDate(endDateObj, 'YYYY-MM-DD');
+        }
         
         // 指定日がイベントの開始日から終了日（含む）の間にあるかチェック
         if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
@@ -1636,7 +1649,13 @@ function getEventsByWeek(startDate) {
     // 終日イベントの場合
     if (isAllDayEvent(event)) {
       const eventStartDate = event.startTime.split('T')[0];
-      const eventEndDate = event.endTime ? event.endTime.split('T')[0] : eventStartDate;
+      // 終日イベントのendTimeは翌日の00:00に設定されているため、1日を引いて実際の終了日を取得
+      let eventEndDate = eventStartDate;
+      if (event.endTime) {
+        const endDateObj = new Date(event.endTime);
+        endDateObj.setDate(endDateObj.getDate() - 1);
+        eventEndDate = formatDate(endDateObj, 'YYYY-MM-DD');
+      }
       const weekStartStr = formatDate(weekStart, 'YYYY-MM-DD');
       const weekEndStr = formatDate(weekEnd, 'YYYY-MM-DD');
       
@@ -3123,7 +3142,7 @@ function validateEvent(event) {
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       errors.push('無効な日付形式です');
     } else if (end <= start) {
-      errors.push(event.allDay ? '終了日は開始日以降にしてください' : '終了時刻は開始時刻より後にしてください');
+      errors.push(event.allDay ? '終了日は開始日と同じか、それ以降にしてください' : '終了時刻は開始時刻より後にしてください');
     }
   }
   
@@ -3406,6 +3425,22 @@ function setupEventListeners() {
     };
     eventListeners.add(allDayStartInput, 'change', handler);
   }
+
+  // allDayEndInputの変更時にも、開始日より前の場合は開始日と同じに設定
+  if (allDayEndInput) {
+    const handler = () => {
+      try {
+      if (!allDayStartInput || !allDayStartInput.value) return;
+      if (!allDayEndInput.value) return;
+      if (new Date(allDayEndInput.value) < new Date(allDayStartInput.value)) {
+        allDayEndInput.value = allDayStartInput.value;
+      }
+      } catch (error) {
+        console.error('Error in allDayEndInput handler:', error);
+      }
+    };
+    eventListeners.add(allDayEndInput, 'change', handler);
+  }
   
   // モーダル関連
   const closeModalBtn = safeGetElementById('closeModal');
@@ -3487,7 +3522,17 @@ function setupEventListeners() {
       };
     if (isAllDay) {
       const allDayStart = formData.get('allDayStart');
-      const allDayEnd = formData.get('allDayEnd') || allDayStart;
+      let allDayEnd = formData.get('allDayEnd') || allDayStart;
+      
+      // 終了日が開始日より前の場合、開始日と同じに設定（Google Apps Scriptとの整合性を保つ）
+      if (allDayStart && allDayEnd) {
+        const startDate = new Date(allDayStart);
+        const endDate = new Date(allDayEnd);
+        if (endDate < startDate) {
+          allDayEnd = allDayStart;
+        }
+      }
+      
       event.startTime = allDayStart ? `${allDayStart}T00:00` : '';
       // 終了日を翌日の00:00に設定（Googleカレンダーの仕様：終了日は「含まない」日として扱われる）
       if (allDayEnd) {
