@@ -296,7 +296,14 @@ function getReminderMinutes(value) {
 
 function applyUpdates(event, { title, start, end, location, fullDescription, isAllDay, reminderMinutes }) {
   if (isAllDay) {
-    event.setAllDayDate(new Date(start));
+    // 終日イベントの場合、開始日と終了日を設定（終了日は「含まない」日として扱われる）
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    // 終了日が開始日と同じまたはそれ以前の場合、開始日の翌日として扱う
+    if (endDate <= startDate) {
+      endDate.setDate(startDate.getDate() + 1);
+    }
+    event.setAllDayDates(startDate, endDate);
   } else {
     event.setTime(start, end);
   }
@@ -311,9 +318,19 @@ function applyUpdates(event, { title, start, end, location, fullDescription, isA
 }
 
 function createEvent(calendar, { title, start, end, location, isAllDay, fullDescription, reminderMinutes }) {
-  const event = isAllDay
-    ? calendar.createAllDayEvent(title, start, { description: fullDescription, location })
-    : calendar.createEvent(title, start, end, { description: fullDescription, location });
+  let event;
+  if (isAllDay) {
+    // 終日イベントの場合、開始日と終了日を設定（終了日は「含まない」日として扱われる）
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    // 終了日が開始日と同じまたはそれ以前の場合、開始日の翌日として扱う
+    if (endDate <= startDate) {
+      endDate.setDate(startDate.getDate() + 1);
+    }
+    event = calendar.createAllDayEvent(title, startDate, endDate, { description: fullDescription, location });
+  } else {
+    event = calendar.createEvent(title, start, end, { description: fullDescription, location });
+  }
 
   if (reminderMinutes !== null) {
     event.removeAllReminders();
@@ -359,32 +376,45 @@ function fetchCalendarEvents() {
   windowEnd.setHours(23, 59, 59, 999);
 
   const events = calendar.getEvents(windowStart, windowEnd);
-  const items = events.map((event) => {
-    const rawDescription = sanitizeDescription(event.getDescription() || '');
-    const scheduleMgrId = extractScheduleMgrId(rawDescription);
-    return {
-      scheduleMgrId,
-      googleEventId: event.getId(),
-      title: event.getTitle(),
-      description: removeTagFromDescription(rawDescription),
-      location: event.getLocation() || '',
-      allDay: event.isAllDayEvent(),
-      startDateTime: formatEventDate(event, 'start'),
-      endDateTime: formatEventDate(event, 'end'),
-      lastUpdated: toIsoString(event.getLastUpdated()),
-      reminderMinutes: getPrimaryReminderMinutes(event),
-    };
-  });
+  
+  // 重複削除処理を実行（削除されたイベントのIDを取得）
+  const deduplicationResult = deduplicateGoogleCalendarEvents(events);
+  const deletedEventIds = new Set(deduplicationResult.deletedEventIds || []);
+  
+  // 削除されたイベントを除外してマッピング
+  const items = events
+    .filter((event) => !deletedEventIds.has(event.getId()))
+    .map((event) => {
+      const rawDescription = sanitizeDescription(event.getDescription() || '');
+      const scheduleMgrId = extractScheduleMgrId(rawDescription);
+      return {
+        scheduleMgrId,
+        googleEventId: event.getId(),
+        title: event.getTitle(),
+        description: removeTagFromDescription(rawDescription),
+        location: event.getLocation() || '',
+        allDay: event.isAllDayEvent(),
+        startDateTime: formatEventDate(event, 'start'),
+        endDateTime: formatEventDate(event, 'end'),
+        lastUpdated: toIsoString(event.getLastUpdated()),
+        reminderMinutes: getPrimaryReminderMinutes(event),
+      };
+    });
+
+  const message = deduplicationResult.deleted > 0
+    ? `Googleカレンダーから予定を取得しました。重複削除: ${deduplicationResult.deleted}件`
+    : 'Googleカレンダーから予定を取得しました。';
 
   return buildResponse({
     success: true,
-    message: 'Googleカレンダーから予定を取得しました。',
+    message: message,
     fetchedAt: toIsoString(new Date()),
     range: {
       start: toIsoString(windowStart),
       end: toIsoString(windowEnd),
     },
     events: items,
+    deduplicated: deduplicationResult.deleted,
   });
 }
 
@@ -420,6 +450,78 @@ function clearCalendarEvents() {
       end: toIsoString(windowEnd),
     },
   });
+}
+
+// Googleカレンダー内の重複イベントを削除（同じ日・同じ名前のイベント）
+function deduplicateGoogleCalendarEvents(events) {
+  if (!events || events.length === 0) {
+    return { deleted: 0, deletedEventIds: [] };
+  }
+
+  // 日付とタイトルでグループ化
+  const eventsByDateTitle = new Map();
+  
+  events.forEach((event) => {
+    const title = event.getTitle() || '';
+    const normalizedTitle = normalizeTitleForComparison(title);
+    
+    // 開始日を取得（終日イベントの場合はgetAllDayStartDate、そうでない場合はgetStartTime）
+    let eventDate;
+    if (event.isAllDayEvent()) {
+      eventDate = event.getAllDayStartDate();
+    } else {
+      eventDate = event.getStartTime();
+    }
+    
+    // 日付部分のみを取得（YYYY-MM-DD形式）
+    const dateStr = Utilities.formatDate(eventDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const key = `${dateStr}|${normalizedTitle}`;
+    
+    if (!eventsByDateTitle.has(key)) {
+      eventsByDateTitle.set(key, []);
+    }
+    eventsByDateTitle.get(key).push(event);
+  });
+
+  let deleted = 0;
+  const deletedEventIds = [];
+
+  // 各グループで重複チェック
+  eventsByDateTitle.forEach((duplicates, key) => {
+    if (duplicates.length <= 1) return; // 重複なし
+
+    // 最新のイベントを残す（lastUpdatedが新しいもの）
+    duplicates.sort((a, b) => {
+      const aTime = a.getLastUpdated() ? a.getLastUpdated().getTime() : 0;
+      const bTime = b.getLastUpdated() ? b.getLastUpdated().getTime() : 0;
+      return bTime - aTime; // 新しい順
+    });
+
+    const keeper = duplicates[0];
+    const title = keeper.getTitle() || '(無題)';
+    const dateStr = key.split('|')[0];
+    
+    console.log(`[Google重複削除] "${title}" (${dateStr}) -> ${duplicates.length}件の重複を検出`);
+
+    // 最新以外を削除
+    for (let i = 1; i < duplicates.length; i++) {
+      try {
+        const eventId = duplicates[i].getId();
+        duplicates[i].deleteEvent();
+        deleted += 1;
+        deletedEventIds.push(eventId);
+        console.log(`[Google重複削除] 削除: "${title}" (${dateStr}) - ${eventId}`);
+      } catch (error) {
+        console.error(`[Google重複削除] 削除に失敗:`, duplicates[i].getId(), error);
+      }
+    }
+  });
+
+  if (deleted > 0) {
+    console.log(`[Google重複削除] 完了: ${deleted}件の重複を削除しました`);
+  }
+
+  return { deleted, deletedEventIds };
 }
 
 function extractScheduleMgrId(description) {
