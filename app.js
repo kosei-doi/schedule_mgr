@@ -44,6 +44,7 @@ let currentDate = new Date();
 let currentView = 'day'; // 'day', 'week', or 'month'
 let editingEventId = null;
 let isFirebaseEnabled = false;
+let quillEditor = null; // Quill editor instance
 const clientId = (() => Date.now().toString(36) + Math.random().toString(36).slice(2))();
 let messageTimeoutId = null;
 let googleSyncIntervalId = null;
@@ -258,14 +259,7 @@ function updateViewsForEvent(event) {
     if (isAllDayEvent(event)) {
       // 終日イベントの場合
       eventStartDate = new Date(event.startTime.split('T')[0]);
-      // 終日イベントのendTimeは翌日の00:00に設定されているため、1日を引いて実際の終了日を取得
-      if (event.endTime) {
-        const endDateObj = new Date(event.endTime);
-        endDateObj.setDate(endDateObj.getDate() - 1);
-        eventEndDate = endDateObj;
-      } else {
-        eventEndDate = eventStartDate;
-      }
+      eventEndDate = event.endTime ? new Date(event.endTime.split('T')[0]) : eventStartDate;
     } else {
       // 時間指定イベントの場合
       eventStartDate = new Date(event.startTime);
@@ -678,20 +672,21 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     throw new Error(message);
   }
   
-  // 全ての場合でローディングを表示
-  showLoading('Googleカレンダーと同期中...');
+  if (!silent) {
+    showLoading('Googleカレンダーと同期中...');
+  }
 
   if (!Array.isArray(events) || events.length === 0) {
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage('同期対象の予定がありません。', 'info', 4000);
     }
     return { created: 0, updated: 0, skipped: 0 };
   }
 
   if (!Array.isArray(events)) {
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage('イベントデータが読み込まれていません。', 'error', 6000);
     }
     return { created: 0, updated: 0, skipped: 0 };
@@ -706,8 +701,8 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
       isEventInAllowedRange(ev, rangeSet)
   );
   if (syncableEvents.length === 0) {
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage('Google同期対象のローカル予定がありません。', 'info', 4000);
     }
     return { created: 0, updated: 0, skipped: 0 };
@@ -728,8 +723,8 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
       mode: 'cors',
     });
   } catch (error) {
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage('Googleカレンダー同期に失敗しました。ネットワークを確認してください。', 'error', 6000);
     }
     throw error;
@@ -738,8 +733,8 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
     const message = `Google Apps Script 呼び出しに失敗しました (${response.status}) ${errorText || ''}`.trim();
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage(message, 'error', 6000);
     }
     throw new Error(message);
@@ -750,8 +745,8 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     result = await response.json();
   } catch (error) {
     // レスポンスがJSONでない場合はそのまま成功扱い
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage('Googleカレンダーと同期しました。', 'success', 5000);
     }
     return { created: 0, updated: 0, skipped: 0 };
@@ -787,16 +782,17 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   const rangeSet = getAllowedDateRanges();
   logAllowedRanges('Google Fetch');
   
-  // 全ての場合でローディングを表示
-  showLoading('Googleカレンダーから取得中...');
+  if (!silent) {
+    showLoading('Googleカレンダーから取得中...');
+  }
 
   let response;
   try {
     const url = `${GOOGLE_APPS_SCRIPT_ENDPOINT}?action=events`;
     response = await fetch(url, { method: 'GET', mode: 'cors' });
   } catch (error) {
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage('Googleカレンダーの取得に失敗しました。ネットワークを確認してください。', 'error', 6000);
     }
     throw error;
@@ -805,8 +801,8 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
     const message = `Googleカレンダーからの取得に失敗しました (${response.status}) ${errorText || ''}`.trim();
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage(message, 'error', 6000);
     }
     throw new Error(message);
@@ -817,8 +813,8 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
     result = await response.json();
   } catch (error) {
     const message = 'Googleカレンダーの応答が不正です。';
-    hideLoading();
     if (!silent) {
+      hideLoading();
       showMessage(message, 'error', 6000);
     }
     throw error;
@@ -954,7 +950,7 @@ async function deduplicateFirebaseEvents() {
         // 最新以外のGoogle由来イベントを削除
         for (let i = 1; i < googleEvents.length; i++) {
           try {
-            const deletedOk = await deleteEvent(googleEvents[i].id, { syncGoogle: false, showLoading: false });
+            const deletedOk = await deleteEvent(googleEvents[i].id, { syncGoogle: false });
             if (deletedOk) {
               deleted += 1;
               console.log(
@@ -970,7 +966,7 @@ async function deduplicateFirebaseEvents() {
       // すべてのローカルイベントを削除
       for (const localEvent of localEvents) {
         try {
-            const deletedOk = await deleteEvent(localEvent.id, { syncGoogle: false, showLoading: false });
+          const deletedOk = await deleteEvent(localEvent.id, { syncGoogle: false });
           if (deletedOk) {
             deleted += 1;
             console.log(
@@ -996,7 +992,7 @@ async function deduplicateFirebaseEvents() {
         // 最新以外を削除
         for (let i = 1; i < localEvents.length; i++) {
           try {
-            const deletedOk = await deleteEvent(localEvents[i].id, { syncGoogle: false, showLoading: false });
+            const deletedOk = await deleteEvent(localEvents[i].id, { syncGoogle: false });
             if (deletedOk) {
               deleted += 1;
               console.log(
@@ -1113,7 +1109,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
             continue;
           }
           try {
-            const deletedOk = await deleteEvent(duplicate.id, { syncGoogle: false, showLoading: false });
+            const deletedOk = await deleteEvent(duplicate.id, { syncGoogle: false });
             if (deletedOk) {
               deleted += 1;
               eventsById.delete(duplicate.id);
@@ -1152,7 +1148,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
             source: 'google',
             isGoogleImported: true,
           },
-          { syncGoogle: false, showLoading: false }
+          { syncGoogle: false }
         );
         updated += 1;
       }
@@ -1182,7 +1178,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
           ...normalized,
           source: existing.source || 'google',
           isGoogleImported: true,
-        }, { syncGoogle: false, showLoading: false });
+        }, { syncGoogle: false });
         updated += 1;
       }
       continue;
@@ -1193,7 +1189,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
       isTimetable: false,
       source: 'google',
       isGoogleImported: true,
-    }, { syncGoogle: false, showLoading: false });
+    }, { syncGoogle: false });
     if (newEventId) {
       created += 1;
       if (key) {
@@ -1262,7 +1258,7 @@ function normalizeForCompare(value, key) {
 
 // イベントを追加（combiと同じロジック）
 async function addEvent(event, options = {}) {
-  const { syncGoogle = true, showLoading: shouldShowLoading = true } = options;
+  const { syncGoogle = true } = options;
   const normalizedStart = normalizeEventDateTimeString(event.startTime);
   const normalizedEnd = normalizeEventDateTimeString(event.endTime);
   const newEvent = {
@@ -1287,10 +1283,6 @@ async function addEvent(event, options = {}) {
     return null;
   }
 
-  if (shouldShowLoading) {
-    showLoading('予定を追加中...');
-  }
-
   try {
     const eventsRef = window.firebase.ref(window.firebase.db, "events");
     const newEventRef = window.firebase.push(eventsRef);
@@ -1311,14 +1303,8 @@ async function addEvent(event, options = {}) {
       }
     }
 
-    if (shouldShowLoading) {
-      hideLoading();
-    }
     return newId;
   } catch (error) {
-    if (shouldShowLoading) {
-      hideLoading();
-    }
     console.error('Firebaseにイベントを追加できませんでした。', error);
     showMessage('イベントを保存できませんでした。ネットワークやFirebase設定を確認してください。', 'error', 6000);
     return null;
@@ -1327,7 +1313,7 @@ async function addEvent(event, options = {}) {
 
 // イベントを更新（combiと同じロジック）
 async function updateEvent(id, event, options = {}) {
-  const { syncGoogle = true, showLoading: shouldShowLoading = true } = options;
+  const { syncGoogle = true } = options;
   const existingEvent = (Array.isArray(events) ? events.find(e => e.id === id) : null) || {};
   const startSource = event.startTime ?? existingEvent.startTime ?? '';
   const endSource = event.endTime ?? existingEvent.endTime ?? '';
@@ -1358,18 +1344,11 @@ async function updateEvent(id, event, options = {}) {
     return false;
   }
 
-  if (shouldShowLoading) {
-    showLoading('予定を更新中...');
-  }
-
   const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
   try {
     await window.firebase.update(eventRef, updatedEvent);
     console.log('Firebaseでイベントを更新:', id);
   } catch (error) {
-    if (shouldShowLoading) {
-      hideLoading();
-    }
     console.error('Firebaseでイベントの更新に失敗しました。', error);
     showMessage('イベントの更新に失敗しました。ネットワーク状況を確認してください。', 'error', 6000);
     return false;
@@ -1388,24 +1367,17 @@ async function updateEvent(id, event, options = {}) {
     }
   }
 
-  if (showLoading) {
-    hideLoading();
-  }
   return true;
 }
 
 // イベントを削除（combiと同じロジック）
 async function deleteEvent(id, options = {}) {
-  const { syncGoogle = true, showLoading: shouldShowLoading = true } = options;
+  const { syncGoogle = true } = options;
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、イベントを削除できません。設定を確認してください。';
     console.error(message);
     showMessage(message, 'error', 6000);
     return false;
-  }
-
-  if (shouldShowLoading) {
-    showLoading('予定を削除中...');
   }
 
   const existingEvent = Array.isArray(events) ? events.find(e => e.id === id) : null;
@@ -1415,9 +1387,6 @@ async function deleteEvent(id, options = {}) {
     await window.firebase.remove(eventRef);
     console.log('Firebaseからイベントを削除:', id);
   } catch (error) {
-    if (shouldShowLoading) {
-      hideLoading();
-    }
     console.error('Firebaseからイベントを削除できませんでした。', error);
     showMessage('イベントの削除に失敗しました。再度お試しください。', 'error', 6000);
     return false;
@@ -1437,9 +1406,6 @@ async function deleteEvent(id, options = {}) {
     }
   }
 
-  if (shouldShowLoading) {
-    hideLoading();
-  }
   return true;
 }
 
@@ -1524,13 +1490,11 @@ function startAutomaticGoogleSync() {
     }
   };
 
-  // 最初の同期を即座に実行（インターバルなし）
-  console.log(`[Google Sync] Initial auto sync starting immediately`);
-  syncTask('initial').catch((error) => {
-    console.error('初期Googleカレンダー同期に失敗しました。', error);
-  });
-  
-  // 定期同期を設定（5分ごと）
+  console.log(`[Google Sync] Initial auto sync scheduled in ${INITIAL_GOOGLE_SYNC_DELAY_MS / 1000}s`);
+  googleSyncTimeoutId = setTimeout(async () => {
+    googleSyncTimeoutId = null;
+    await syncTask('initial-delay');
+  }, INITIAL_GOOGLE_SYNC_DELAY_MS);
   googleSyncIntervalId = setInterval(() => syncTask('interval'), GOOGLE_SYNC_INTERVAL_MS);
 }
 
@@ -1563,13 +1527,7 @@ function getEventsByDate(date) {
       // 終日イベントの場合
       if (isAllDayEvent(ev)) {
         const eventStartDate = ev.startTime.split('T')[0];
-        // 終日イベントのendTimeは翌日の00:00に設定されているため、1日を引いて実際の終了日を取得
-        let eventEndDate = eventStartDate;
-        if (ev.endTime) {
-          const endDateObj = new Date(ev.endTime);
-          endDateObj.setDate(endDateObj.getDate() - 1);
-          eventEndDate = formatDate(endDateObj, 'YYYY-MM-DD');
-        }
+        const eventEndDate = ev.endTime ? ev.endTime.split('T')[0] : eventStartDate;
         
         // 指定日がイベントの開始日から終了日（含む）の間にあるかチェック
         if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
@@ -1649,13 +1607,7 @@ function getEventsByWeek(startDate) {
     // 終日イベントの場合
     if (isAllDayEvent(event)) {
       const eventStartDate = event.startTime.split('T')[0];
-      // 終日イベントのendTimeは翌日の00:00に設定されているため、1日を引いて実際の終了日を取得
-      let eventEndDate = eventStartDate;
-      if (event.endTime) {
-        const endDateObj = new Date(event.endTime);
-        endDateObj.setDate(endDateObj.getDate() - 1);
-        eventEndDate = formatDate(endDateObj, 'YYYY-MM-DD');
-      }
+      const eventEndDate = event.endTime ? event.endTime.split('T')[0] : eventStartDate;
       const weekStartStr = formatDate(weekStart, 'YYYY-MM-DD');
       const weekEndStr = formatDate(weekEnd, 'YYYY-MM-DD');
       
@@ -1900,45 +1852,13 @@ function bindEventElementInteractions(element) {
   element.addEventListener('click', (e) => {
     e.stopPropagation();
     const id = element.dataset.eventId;
-    if (!id) return;
-    
-    // モバイル版で週表示の場合は詳細表示、それ以外は編集モーダル
-    const isMobile = window.innerWidth <= 640;
-    const isWeekView = currentView === 'week';
-    
-    if (isMobile && isWeekView) {
-      // 既に開いている詳細パネルをクリックした場合は閉じる
-      const existingDetail = document.querySelector(`.event-detail-panel[data-event-id="${id}"]`);
-      if (existingDetail) {
-        closeEventDetailPanel();
-      } else {
-        showEventDetail(id);
-      }
-    } else {
-      showEventModal(id);
-    }
+    if (id) showEventModal(id);
   });
   element.addEventListener('keypress', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       const id = element.dataset.eventId;
-      if (!id) return;
-      
-      // モバイル版で週表示の場合は詳細表示、それ以外は編集モーダル
-      const isMobile = window.innerWidth <= 640;
-      const isWeekView = currentView === 'week';
-      
-      if (isMobile && isWeekView) {
-        // 既に開いている詳細パネルをクリックした場合は閉じる
-        const existingDetail = document.querySelector(`.event-detail-panel[data-event-id="${id}"]`);
-        if (existingDetail) {
-          closeEventDetailPanel();
-        } else {
-          showEventDetail(id);
-        }
-      } else {
-        showEventModal(id);
-      }
+      if (id) showEventModal(id);
     }
   });
 }
@@ -2049,7 +1969,7 @@ function positionEventInDayView(element, event, targetDate = null) {
   
   element.style.display = '';
   
-  // 時間スロットの実際の高さを取得
+  // 時間スロットの実際の高さを取得（特別な位置決めのためにも必要）
   const hourHeight = getHourHeight();
   
   // タイトルだけを表示するための最低高さ（1時間分の高さの約30%）
@@ -2057,6 +1977,60 @@ function positionEventInDayView(element, event, targetDate = null) {
   // タイトルと時間の両方を表示するための最低高さ（1.5時間分）
   const MIN_HEIGHT_FOR_TIME = hourHeight * 1.5;
   
+  // イベントの実際の時刻を現在日の0時からの分単位で計算
+  const eventStartMinutes = Math.floor((startTime.getTime() - currentDay.getTime()) / 60000);
+  const eventEndMinutes = Math.floor((endTime.getTime() - currentDay.getTime()) / 60000);
+  
+  // 2時（120分）と4時（240分）の閾値
+  const DAY_END_HOUR = 2; // 2am is considered end of day
+  const DAY_END_MINUTES = DAY_END_HOUR * 60; // 120 minutes
+  
+  // 特別な処理: 0-4amのイベントの位置決め
+  let useSpecialPositioning = false;
+  let specialTop = null;
+  let specialHeight = null;
+  
+  // Case 1: イベントが2時より前に終了する場合、11pm-0amの位置（最下部）に表示
+  // 終了時刻をmidnight (00:00) に設定して表示
+  if (eventEndMinutes < DAY_END_MINUTES && eventEndMinutes > 0) {
+    useSpecialPositioning = true;
+    // 最下部の位置: 11pm (23:00) = VISIBLE_END_HOUR (23) - VISIBLE_START_HOUR (4) = 19時間分
+    const bottomPositionHours = VISIBLE_END_HOUR - VISIBLE_START_HOUR; // 19 hours
+    // イベントの実際の継続時間を計算
+    const actualDurationMinutes = Math.max(15, eventEndMinutes - Math.max(0, eventStartMinutes));
+    // 高さは実際の継続時間を使用
+    specialHeight = Math.max(MIN_HEIGHT_TITLE_ONLY, (actualDurationMinutes / 60) * hourHeight);
+    // 最下部に配置（高さ分だけ上に位置を調整して、bottom edgeが11pm位置になる）
+    specialTop = (bottomPositionHours * hourHeight) - specialHeight;
+  }
+  // Case 2: イベントが2時以降に開始し、4時より前に終了する場合、4-5amの位置（最上部）に表示
+  // 4:00 AMから5:00 AM（1時間）として表示
+  else if (eventStartMinutes >= DAY_END_MINUTES && eventEndMinutes < VISIBLE_START_HOUR * 60 && eventStartMinutes < 1440) {
+    useSpecialPositioning = true;
+    // 最上部の位置: 4am = 0（表示可能範囲の開始）
+    specialTop = 0;
+    // 固定で1時間分（4am-5am）の高さ
+    specialHeight = hourHeight;
+  }
+  
+  // 特別な位置決めを使用する場合
+  if (useSpecialPositioning && specialTop !== null && specialHeight !== null) {
+    element.style.top = `${specialTop}px`;
+    element.style.height = `${specialHeight}px`;
+    
+    // 高さが最低高さ以下の場合は時間要素を非表示
+    const timeElement = element.querySelector('.event-time');
+    if (timeElement) {
+      if (specialHeight < MIN_HEIGHT_FOR_TIME) {
+        timeElement.style.display = 'none';
+      } else {
+        timeElement.style.display = '';
+      }
+    }
+    return;
+  }
+  
+  // 通常の位置決め処理
   // 表示開始時刻と終了時刻を分単位で計算
   const displayStartMinutesTotal = displayStart.getHours() * 60 + displayStart.getMinutes();
   const displayEndMinutesTotal = displayEnd.getHours() * 60 + displayEnd.getMinutes();
@@ -2087,116 +2061,6 @@ function positionEventInDayView(element, event, targetDate = null) {
     }
   }
 }
-
-// イベント詳細を表示（モバイル版の週表示用 - インライン展開）
-function showEventDetail(eventId) {
-  if (!eventId || typeof eventId !== 'string' || eventId.startsWith('temp-')) {
-    return;
-  }
-  
-  if (!Array.isArray(events)) return;
-  const event = events.find(e => e.id === eventId);
-  if (!event) return;
-  
-  // 既に開いている詳細パネルがあれば閉じる
-  const existingDetail = document.querySelector('.event-detail-panel');
-  if (existingDetail) {
-    existingDetail.remove();
-  }
-  
-  // イベント要素を取得
-  const eventElement = document.querySelector(`[data-event-id="${eventId}"]`);
-  if (!eventElement) return;
-  
-  // 詳細パネルを作成
-  const detailPanel = document.createElement('div');
-  detailPanel.className = 'event-detail-panel';
-  detailPanel.dataset.eventId = eventId;
-  
-  // タイトル
-  const title = event.title || '無題の予定';
-  
-  // 時刻情報のみを表示
-  let timeInfo = '';
-  if (isAllDayEvent(event)) {
-    const startDate = event.startTime ? new Date(event.startTime.split('T')[0]) : null;
-    const endDate = event.endTime ? new Date(event.endTime) : null;
-    if (endDate) {
-      endDate.setDate(endDate.getDate() - 1); // 終日イベントのendTimeは翌日の00:00なので1日引く
-    }
-    
-    if (startDate && !Number.isNaN(startDate.getTime())) {
-      const startStr = formatDate(startDate, 'M月D日');
-      if (endDate && !Number.isNaN(endDate.getTime()) && formatDate(endDate, 'YYYY-MM-DD') !== formatDate(startDate, 'YYYY-MM-DD')) {
-        const endStr = formatDate(endDate, 'M月D日');
-        timeInfo = `${startStr} ～ ${endStr} (終日)`;
-      } else {
-        timeInfo = `${startStr} (終日)`;
-      }
-    }
-  } else {
-    const startTime = event.startTime ? formatTime(event.startTime) : '--:--';
-    const endTime = event.endTime ? formatTime(event.endTime) : '--:--';
-    timeInfo = `${startTime} - ${endTime}`;
-  }
-  
-  detailPanel.innerHTML = `
-    <div class="event-detail-header">
-      <h3 class="event-detail-title">${escapeHtml(title)}</h3>
-      <div class="event-detail-time">${timeInfo}</div>
-    </div>
-    <div class="event-detail-actions">
-      <button class="btn btn-primary btn-sm" onclick="window.showEventModalFromDetail('${eventId}')">編集</button>
-      <button class="btn btn-secondary btn-sm" onclick="window.closeEventDetailPanel()">閉じる</button>
-    </div>
-  `;
-  
-  // 週表示のイベントコンテナに挿入（週全体の幅を使うため）
-  const weekEvents = document.querySelector('#weekEvents');
-  const dayEventsContainer = eventElement.closest('.day-events-container');
-  
-  if (weekEvents && dayEventsContainer) {
-    // イベント要素の位置を取得して、詳細パネルの位置を計算
-    const eventRect = eventElement.getBoundingClientRect();
-    const weekEventsRect = weekEvents.getBoundingClientRect();
-    
-    // 詳細パネルをweek-eventsに追加
-    weekEvents.appendChild(detailPanel);
-    
-    // 詳細パネルの位置を設定（イベント要素の下に配置）
-    // スクロール位置を考慮
-    const scrollTop = dayEventsContainer.scrollTop;
-    const topOffset = eventRect.bottom - weekEventsRect.top + scrollTop;
-    detailPanel.style.top = `${topOffset}px`;
-    
-    // スクロールして詳細パネルが見えるように
-    setTimeout(() => {
-      detailPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, 50);
-  } else {
-    // フォールバック: 元の方法
-    const parent = eventElement.parentElement;
-    if (parent) {
-      parent.insertBefore(detailPanel, eventElement.nextSibling);
-      setTimeout(() => {
-        detailPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }, 50);
-    }
-  }
-}
-
-// グローバル関数として定義（onclickから呼び出すため）
-window.showEventModalFromDetail = function(eventId) {
-  closeEventDetailPanel();
-  showEventModal(eventId);
-};
-
-window.closeEventDetailPanel = function() {
-  const detailPanel = document.querySelector('.event-detail-panel');
-  if (detailPanel) {
-    detailPanel.remove();
-  }
-};
 
 // モーダル表示
 function showEventModal(eventId = null) {
@@ -2252,9 +2116,16 @@ function showEventModal(eventId = null) {
     
     // フォームに値を設定
     const titleInput = safeGetElementById('eventTitle');
-    const descInput = safeGetElementById('eventDescription');
     if (titleInput) titleInput.value = event.title || '';
-    if (descInput) descInput.value = event.description || '';
+    // Quill editorに内容を設定
+    if (quillEditor) {
+      const description = event.description || '';
+      // HTMLとして設定（既にHTMLの場合はそのまま、プレーンテキストの場合はHTMLとして設定）
+      quillEditor.root.innerHTML = description || '<p><br></p>';
+    } else {
+      const descInput = safeGetElementById('eventDescription');
+      if (descInput) descInput.value = event.description || '';
+    }
     if (startInput) startInput.value = toDateTimeLocalValue(event.startTime);
     if (endInput) endInput.value = toDateTimeLocalValue(event.endTime);
     
@@ -2318,9 +2189,14 @@ function showEventModal(eventId = null) {
     
     // すべてのフィールドをクリア（タイトル、説明、色など）
     const titleInput = safeGetElementById('eventTitle');
-    const descInput = safeGetElementById('eventDescription');
     if (titleInput) titleInput.value = '';
-    if (descInput) descInput.value = '';
+    // Quill editorをクリア
+    if (quillEditor) {
+      quillEditor.root.innerHTML = '<p><br></p>';
+    } else {
+      const descInput = safeGetElementById('eventDescription');
+      if (descInput) descInput.value = '';
+    }
     
     // 色をデフォルト（青）にリセット
     const defaultColorRadio = document.querySelector('input[name="color"][value="#3b82f6"]');
@@ -2331,7 +2207,12 @@ function showEventModal(eventId = null) {
       if (!Array.isArray(events)) return;
       const event = events.find(e => e.id === eventId);
       if (event) {
-        if (descInput) descInput.value = event.description || '';
+        if (quillEditor) {
+          quillEditor.root.innerHTML = event.description || '<p><br></p>';
+        } else {
+          const descInput = safeGetElementById('eventDescription');
+          if (descInput) descInput.value = event.description || '';
+        }
         if (startInput) startInput.value = toDateTimeLocalValue(event.startTime);
         if (endInput) endInput.value = toDateTimeLocalValue(event.endTime);
         if (allDayCheckbox) {
@@ -2871,7 +2752,7 @@ async function importEventsFromJSONData(obj) {
       reminderMinutes: ev.reminderMinutes ?? null,
       isTimetable: ev.isTimetable === true,
     };
-    const newId = await addEvent(toAdd, { showLoading: false });
+    const newId = await addEvent(toAdd);
     if (newId) {
       importedCount++;
     }
@@ -2883,35 +2764,24 @@ async function handleJSONImport(jsonData) {
   if (!jsonData || typeof jsonData !== 'object') {
     throw new Error('JSONデータが不正です');
   }
+  // Check if it's a timetable file
+  const isTimetable = 
+    jsonData.type === 'timetable' ||
+    jsonData.timetableData ||
+    Array.isArray(jsonData.schoolDays) ||
+    (jsonData.schedule && jsonData.periodTimes && Array.isArray(jsonData.periodTimes));
   
-  showLoading('インポート中...');
-  
-  try {
-    // Check if it's a timetable file
-    const isTimetable = 
-      jsonData.type === 'timetable' ||
-      jsonData.timetableData ||
-      Array.isArray(jsonData.schoolDays) ||
-      (jsonData.schedule && jsonData.periodTimes && Array.isArray(jsonData.periodTimes));
-    
-    if (!Array.isArray(jsonData) && isTimetable) {
-      const count = await importTimetableFromData(jsonData);
-      hideLoading();
-      showMessage(`時間割をインポートしました: ${count}件の予定を追加`, 'success');
-      return;
-    }
-    if (Array.isArray(jsonData.events)) {
-      const count = await importEventsFromJSONData(jsonData);
-      hideLoading();
-      showMessage(`イベントをインポートしました: ${count}件`, 'success');
-      return;
-    }
-    hideLoading();
-    throw new Error('対応していないJSON形式です');
-  } catch (error) {
-    hideLoading();
-    throw error;
+  if (!Array.isArray(jsonData) && isTimetable) {
+    const count = await importTimetableFromData(jsonData);
+    showMessage(`時間割をインポートしました: ${count}件の予定を追加`, 'success');
+    return;
   }
+  if (Array.isArray(jsonData.events)) {
+    const count = await importEventsFromJSONData(jsonData);
+    showMessage(`イベントをインポートしました: ${count}件`, 'success');
+    return;
+  }
+  throw new Error('対応していないJSON形式です');
 }
 
 // 時間割データを取り込む
@@ -2997,11 +2867,7 @@ async function importTimetableFromData(data) {
       let endTime;
       if (eventAllDay) {
         startTime = `${dateStr}T00:00`;
-        // 終了日を翌日の00:00に設定（Googleカレンダーの仕様：終了日は「含まない」日として扱われる）
-        const [year, month, day] = dateStr.split('-').map(Number);
-        const endDate = new Date(year, month - 1, day + 1);
-        const endDateStr = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
-        endTime = `${endDateStr}T00:00`;
+        endTime = `${dateStr}T23:59`;
       } else {
         const startMinutes = timeToMinutes(config.start) ?? timeToMinutes(defaultStart) ?? 0;
         let endMinutes = timeToMinutes(config.end) ?? timeToMinutes(defaultEnd) ?? (startMinutes + 60);
@@ -3040,7 +2906,7 @@ async function importTimetableFromData(data) {
         isTimetable: true,
       };
 
-      const newId = await addEvent(newEvent, { showLoading: false });
+      const newId = await addEvent(newEvent);
       if (newId) {
         importedCount++;
       }
@@ -3255,6 +3121,121 @@ function sanitizeTextInput(input) {
   return input.trim();
 }
 
+// HTMLコンテンツのサニタイズ（Quillで使用される安全なHTMLタグのみ許可）
+function sanitizeHTML(html) {
+  if (typeof html !== 'string') return '';
+  
+  // 一時的なdiv要素を作成してHTMLをパース
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = html;
+  
+  // 許可するタグと属性
+  const allowedTags = ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'span'];
+  const allowedAttributes = {
+    'a': ['href', 'target'],
+    'span': ['style'],
+    'p': ['style']
+  };
+  
+  // 再帰的に要素をサニタイズ
+  function sanitizeNode(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.cloneNode(true);
+    }
+    
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const tagName = node.tagName.toLowerCase();
+      
+      if (!allowedTags.includes(tagName)) {
+        // 許可されていないタグは内容のみを保持
+        const fragment = document.createDocumentFragment();
+        Array.from(node.childNodes).forEach(child => {
+          const sanitized = sanitizeNode(child);
+          if (sanitized) {
+            fragment.appendChild(sanitized);
+          }
+        });
+        return fragment;
+      }
+      
+      // 許可されたタグの場合は要素を作成
+      const newElement = document.createElement(tagName);
+      
+      // 許可された属性のみをコピー
+      const allowedAttrs = allowedAttributes[tagName] || [];
+      Array.from(node.attributes).forEach(attr => {
+        if (allowedAttrs.includes(attr.name.toLowerCase())) {
+          if (attr.name === 'href') {
+            // href属性は安全なURLのみ許可
+            try {
+              const url = new URL(attr.value, window.location.href);
+              if (url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:') {
+                newElement.setAttribute(attr.name, attr.value);
+              }
+            } catch (e) {
+              // 無効なURLは無視
+            }
+          } else if (attr.name === 'style') {
+            // style属性は基本的なスタイルのみ許可（色、背景色など）
+            const safeStyles = attr.value.match(/(color|background-color):\s*[^;]+/gi);
+            if (safeStyles) {
+              newElement.setAttribute(attr.name, safeStyles.join('; '));
+            }
+          } else {
+            newElement.setAttribute(attr.name, attr.value);
+          }
+        }
+      });
+      
+      // 子要素を再帰的にサニタイズ
+      Array.from(node.childNodes).forEach(child => {
+        const sanitized = sanitizeNode(child);
+        if (sanitized) {
+          if (sanitized.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+            Array.from(sanitized.childNodes).forEach(fragChild => {
+              newElement.appendChild(fragChild);
+            });
+          } else {
+            newElement.appendChild(sanitized);
+          }
+        }
+      });
+      
+      return newElement;
+    }
+    
+    return null;
+  }
+  
+  // すべての子ノードをサニタイズ
+  const fragment = document.createDocumentFragment();
+  Array.from(tempDiv.childNodes).forEach(child => {
+    const sanitized = sanitizeNode(child);
+    if (sanitized) {
+      if (sanitized.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+        Array.from(sanitized.childNodes).forEach(fragChild => {
+          fragment.appendChild(fragChild);
+        });
+      } else {
+        fragment.appendChild(sanitized);
+      }
+    }
+  });
+  
+  // サニタイズされたHTMLを文字列として返す
+  const resultDiv = document.createElement('div');
+  resultDiv.appendChild(fragment);
+  return resultDiv.innerHTML;
+}
+
+// HTMLからテキストのみを抽出（文字数カウント用）
+function getTextFromHTML(html) {
+  if (typeof html !== 'string') return '';
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = html;
+  return tempDiv.textContent || tempDiv.innerText || '';
+}
+
 // ID生成関数
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -3284,7 +3265,7 @@ function validateEvent(event) {
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       errors.push('無効な日付形式です');
     } else if (end <= start) {
-      errors.push(event.allDay ? '終了日は開始日と同じか、それ以降にしてください' : '終了時刻は開始時刻より後にしてください');
+      errors.push(event.allDay ? '終了日は開始日以降にしてください' : '終了時刻は開始時刻より後にしてください');
     }
   }
   
@@ -3320,6 +3301,64 @@ function validateEvent(event) {
 // 初期化（combiと同じロジック）
 document.addEventListener('DOMContentLoaded', function() {
   console.log('アプリケーションを初期化中...');
+  
+  // Quill editor を初期化（拡張されたビジュアルエディタ）
+  const descContainer = document.getElementById('eventDescription');
+  if (descContainer && typeof Quill !== 'undefined') {
+    quillEditor = new Quill('#eventDescription', {
+      theme: 'snow',
+      placeholder: '説明を入力...（リッチテキスト、画像、リンクなどが使用できます）',
+      modules: {
+        toolbar: {
+          container: [
+            [{ 'header': [1, 2, 3, false] }],
+            ['bold', 'italic', 'underline', 'strike'],
+            [{ 'list': 'ordered'}, { 'list': 'bullet' }, 'blockquote', 'code-block'],
+            [{ 'align': [] }],
+            [{ 'color': [] }, { 'background': [] }],
+            ['link', 'image'],
+            ['clean']
+          ],
+          handlers: {
+            'image': function() {
+              const input = document.createElement('input');
+              input.setAttribute('type', 'file');
+              input.setAttribute('accept', 'image/*');
+              input.click();
+              
+              input.onchange = () => {
+                const file = input.files[0];
+                if (file) {
+                  // ファイルをData URLとして読み込む（実際のアプリではサーバーにアップロードすることを推奨）
+                  const reader = new FileReader();
+                  reader.onload = (e) => {
+                    const range = this.quill.getSelection(true);
+                    this.quill.insertEmbed(range.index, 'image', e.target.result, 'user');
+                    this.quill.setSelection(range.index + 1);
+                  };
+                  reader.readAsDataURL(file);
+                }
+              };
+            }
+          }
+        }
+      }
+    });
+    
+    // Quillの内容変更時にhidden inputを更新
+    quillEditor.on('text-change', function() {
+      const hiddenInput = document.getElementById('eventDescriptionInput');
+      if (hiddenInput) {
+        const html = quillEditor.root.innerHTML;
+        // 空のコンテンツ（<p><br></p>のみ）の場合は空文字列に
+        hiddenInput.value = html === '<p><br></p>' ? '' : html;
+      }
+    });
+    
+    console.log('Enhanced Quill visual editor initialized');
+  } else if (descContainer) {
+    console.warn('Quill library not loaded');
+  }
   
   // Firebase接続チェック
   if (!checkFirebase()) {
@@ -3567,22 +3606,6 @@ function setupEventListeners() {
     };
     eventListeners.add(allDayStartInput, 'change', handler);
   }
-
-  // allDayEndInputの変更時にも、開始日より前の場合は開始日と同じに設定
-  if (allDayEndInput) {
-    const handler = () => {
-      try {
-      if (!allDayStartInput || !allDayStartInput.value) return;
-      if (!allDayEndInput.value) return;
-      if (new Date(allDayEndInput.value) < new Date(allDayStartInput.value)) {
-        allDayEndInput.value = allDayStartInput.value;
-      }
-      } catch (error) {
-        console.error('Error in allDayEndInput handler:', error);
-      }
-    };
-    eventListeners.add(allDayEndInput, 'change', handler);
-  }
   
   // モーダル関連
   const closeModalBtn = safeGetElementById('closeModal');
@@ -3604,20 +3627,14 @@ function setupEventListeners() {
     };
     eventListeners.add(eventModal, 'click', handler);
   }
-
+  
   // ESCキーでモーダルを閉じる
   const escHandler = (e) => {
     try {
     if (e.key === 'Escape') {
       const modal = safeGetElementById('eventModal');
-      const confirmModal = safeGetElementById('confirmModal');
       if (modal && modal.classList.contains('show')) {
         closeEventModal();
-      } else if (confirmModal && confirmModal.classList.contains('show')) {
-        closeConfirmModal();
-      } else {
-        // 詳細パネルを閉じる
-        closeEventDetailPanel();
       }
     }
     } catch (error) {
@@ -3650,7 +3667,15 @@ function setupEventListeners() {
       
       // 入力値をサニタイズ
       const title = sanitizeTextInput(formData.get('title') || '');
-      const description = sanitizeTextInput(formData.get('description') || '');
+      // Quill editorから内容を取得してサニタイズ
+      let description = '';
+      if (quillEditor) {
+        const html = quillEditor.root.innerHTML;
+        const rawDescription = html === '<p><br></p>' ? '' : html;
+        description = sanitizeHTML(rawDescription);
+      } else {
+        description = sanitizeTextInput(formData.get('description') || '');
+      }
       
       const event = {
         title: title,
@@ -3670,28 +3695,9 @@ function setupEventListeners() {
       };
     if (isAllDay) {
       const allDayStart = formData.get('allDayStart');
-      let allDayEnd = formData.get('allDayEnd') || allDayStart;
-      
-      // 終了日が開始日より前の場合、開始日と同じに設定（Google Apps Scriptとの整合性を保つ）
-      if (allDayStart && allDayEnd) {
-        const startDate = new Date(allDayStart);
-        const endDate = new Date(allDayEnd);
-        if (endDate < startDate) {
-          allDayEnd = allDayStart;
-        }
-      }
-      
+      const allDayEnd = formData.get('allDayEnd') || allDayStart;
       event.startTime = allDayStart ? `${allDayStart}T00:00` : '';
-      // 終了日を翌日の00:00に設定（Googleカレンダーの仕様：終了日は「含まない」日として扱われる）
-      if (allDayEnd) {
-        // YYYY-MM-DD形式の文字列を処理
-        const [year, month, day] = allDayEnd.split('-').map(Number);
-        const endDate = new Date(year, month - 1, day + 1);
-        const endDateStr = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
-        event.endTime = `${endDateStr}T00:00`;
-      } else {
-        event.endTime = '';
-      }
+      event.endTime = allDayEnd ? `${allDayEnd}T23:59` : '';
     }
     const existingEvent = editingEventId && Array.isArray(events) ? events.find(e => e.id === editingEventId) : null;
     if (existingEvent?.isTimetable) {
@@ -3736,7 +3742,7 @@ function setupEventListeners() {
         };
         
         // Firebaseに保存（成功後にローカル配列を更新）
-        const newId = await addEvent(newEvent, { showLoading: false });
+        const newId = await addEvent(newEvent);
         if (newId && !isFirebaseEnabled) {
           // Firebaseが無効な場合のみローカル配列に追加
           newEvent.id = newId;
@@ -3745,7 +3751,7 @@ function setupEventListeners() {
       } else if (editingEventId) {
         // 既存イベントを更新
         // Firebase更新を先に実行し、成功後にローカル配列を更新
-        await updateEvent(editingEventId, event, { showLoading: false });
+        await updateEvent(editingEventId, event);
         // ローカル配列も更新（Firebaseのリアルタイム更新で上書きされる可能性があるが、即座のUI更新のため）
         if (Array.isArray(events)) {
           const eventIndex = events.findIndex(e => e.id === editingEventId);
@@ -3767,7 +3773,7 @@ function setupEventListeners() {
         }
       } else {
         // 新規イベントを作成
-        const newId = await addEvent(event, { showLoading: false });
+        const newId = await addEvent(event);
         if (newId && !isFirebaseEnabled) {
           // Firebaseが無効な場合のみローカル配列に追加
           const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
@@ -4088,13 +4094,6 @@ function attachResizeHandlers() {
       // リサイズハンドルクリックは除外
       if (e.target.classList.contains('resize-handle')) return;
       
-      // モバイル版で週表示の場合はドラッグ処理をスキップ（詳細パネル表示のため）
-      const isMobile = window.innerWidth <= 640;
-      const isWeekView = currentView === 'week';
-      if (isMobile && isWeekView) {
-        return; // クリックイベントに任せる
-      }
-      
       e.stopPropagation();
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev || ev.isTimetable === true || !ev.startTime || !ev.endTime) return;
@@ -4118,13 +4117,6 @@ function attachResizeHandlers() {
     function onEventTouchStart(e) {
       // リサイズハンドルクリックは除外
       if (e.target.classList.contains('resize-handle')) return;
-      
-      // モバイル版で週表示の場合はドラッグ処理をスキップ（詳細パネル表示のため）
-      const isMobile = window.innerWidth <= 640;
-      const isWeekView = currentView === 'week';
-      if (isMobile && isWeekView) {
-        return; // クリックイベントに任せる
-      }
       
       e.preventDefault(); // スクロールを防ぐ
       e.stopPropagation();
@@ -4281,7 +4273,7 @@ function attachResizeHandlers() {
           startTime: newStartTime,
           endTime: newEndTime,
           color: ev.color
-        }, { showLoading: false });
+        });
         hideLoading();
       } catch (error) {
         hideLoading();
@@ -4353,7 +4345,7 @@ function attachResizeHandlers() {
           startTime: newStartTime,
           endTime: newEndTime,
           color: ev.color
-        }, { showLoading: false });
+        });
         hideLoading();
       } catch (error) {
         hideLoading();
