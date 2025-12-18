@@ -2319,9 +2319,13 @@ function createMonthDayElement(date, currentMonth) {
       if (!time.textContent) time.classList.add('hidden');
 
       // モバイル版の月表示では時間を非表示
-      const isMobile = window.innerWidth <= 640;
+      const isMobile = window.innerWidth <= 768;
+      console.log(`[MONTH EVENT] currentView: ${currentView}, isMobile: ${isMobile}, window.innerWidth: ${window.innerWidth}`);
       if (isMobile && currentView === 'month') {
+        console.log('[MONTH EVENT] Hiding time for mobile month view');
         time.classList.add('hidden');
+      } else {
+        console.log(`[MONTH EVENT] Showing time - isMobile: ${isMobile}, currentView: ${currentView}`);
       }
 
       const title = document.createElement('span');
@@ -3950,7 +3954,7 @@ function attachResizeHandlers() {
 
     if (!topHandle || !bottomHandle) return;
     
-    const isMobile = window.innerWidth <= 640; // モバイル判定を各アイテムで実行
+    const isMobile = window.innerWidth <= 768; // モバイル判定を各アイテムで実行
     
     // モバイルではリサイズハンドルを非表示
     if (isMobile) {

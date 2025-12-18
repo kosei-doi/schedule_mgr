@@ -1396,7 +1396,7 @@ body.modal-open {
 }
 
 /* レスポンシブデザイン */
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   .header {
     padding: 15px;
   }
