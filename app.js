@@ -3971,8 +3971,8 @@ function attachResizeHandlers() {
         originalEnd = endDate;
         resizing = edge;
         item.classList.add('resizing');
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp, { once: true });
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp, { once: true });
       };
     }
 
@@ -3994,9 +3994,11 @@ function attachResizeHandlers() {
       originalEnd = endDate;
       originalTop = parseFloat(item.style.top) || 0;
       resizing = 'move';
+      hasDragged = false; // ドラッグ開始時にリセット
       item.classList.add('dragging');
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp, { once: true });
+      console.log(`[DRAG START] Event ${id}, startY: ${startY}`);
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp, { once: true });
     }
 
     // タッチイベント用の関数
@@ -4022,8 +4024,8 @@ function attachResizeHandlers() {
       originalTop = parseFloat(item.style.top) || 0;
       resizing = 'move';
       item.classList.add('dragging');
-      document.addEventListener('touchmove', onTouchMove, { passive: false });
-      document.addEventListener('touchend', onTouchEnd, { once: true });
+      window.addEventListener('touchmove', onTouchMove, { passive: false });
+      window.addEventListener('touchend', onTouchEnd, { once: true });
     }
 
     function onMouseMove(e) {
@@ -4035,6 +4037,8 @@ function attachResizeHandlers() {
       if (Math.abs(dy) >= 5) {
         hasDragged = true;
       }
+
+      console.log(`[DRAG MOVE] dy: ${dy}, hasDragged: ${hasDragged}, minutesDelta: ${minutesDelta}`);
       
       if (resizing === 'top') {
         const newStart = new Date(originalStart.getTime() + minutesDelta * 60000);
@@ -4094,7 +4098,7 @@ function attachResizeHandlers() {
 
     async function onMouseUp(e) {
       // イベントリスナーを確実に削除（{once: true}を使用しているが、念のため削除）
-      document.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mousemove', onMouseMove);
       item.classList.remove('resizing', 'dragging');
 
       // 状態を保存（リセット前に）
@@ -4116,12 +4120,16 @@ function attachResizeHandlers() {
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
+      console.log(`[MOUSE UP] Event ${id}, dy: ${dy}, hasDragged: ${currentHasDragged}, minutesDelta: ${minutesDelta}`);
 
       // クリック（ドラッグなし）は詳細モーダルを開く
       if (currentResizing === 'move' && !currentHasDragged) {
+        console.log(`[MOUSE UP] Click detected (no drag), opening modal for event ${id}`);
         showEventModal(id);
         return;
       }
+
+      console.log(`[MOUSE UP] Drag detected, saving event ${id}`);
 
       // 新しい時間を計算
       let newStartTime = ev.startTime;
@@ -4179,7 +4187,7 @@ function attachResizeHandlers() {
 
     async function onTouchEnd(e) {
       // イベントリスナーを確実に削除（{once: true}を使用しているが、念のため削除）
-      document.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchmove', onTouchMove);
       item.classList.remove('resizing', 'dragging');
       
       // 状態を保存（リセット前に）
@@ -4203,12 +4211,16 @@ function attachResizeHandlers() {
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
+      console.log(`[TOUCH END] Event ${id}, dy: ${dy}, hasDragged: ${currentHasDragged}, minutesDelta: ${minutesDelta}`);
 
       // クリック（ドラッグなし）は詳細モーダルを開く
       if (currentResizing === 'move' && !currentHasDragged) {
+        console.log(`[TOUCH END] Click detected (no drag), opening modal for event ${id}`);
         showEventModal(id);
         return;
       }
+
+      console.log(`[TOUCH END] Drag detected, saving event ${id}`);
 
       // 新しい時間を計算
       let newStartTime = ev.startTime;
