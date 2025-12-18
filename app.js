@@ -411,12 +411,12 @@ async function loadEvents() {
         }
       } catch (error) {
       }
-      
-      updateViews();
+
+      // 通知スケジュールを更新（ビュー更新はDOMContentLoadedで行う）
       scheduleAllNotifications();
     } else {
       events = [];
-      updateViews();
+      // ビュー更新はDOMContentLoadedで行う
     }
   } catch (error) {
     showMessage('予定の読み込みに失敗しました。ネットワークを確認してください。', 'error', 6000);
@@ -704,7 +704,7 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
   }
   
   if (!silent) {
-    showLoading('Googleカレンダーと同期中...');
+    showLoading('スケジュールマネージャーを起動中...');
   }
 
   if (!Array.isArray(events) || events.length === 0) {
@@ -1203,10 +1203,14 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
   }
 
   // Firebase内の全イベントに対して重複チェックを実行
+  let firebaseDeleted = 0;
   try {
-    const { deleted: firebaseDeleted } = await deduplicateFirebaseEvents();
+    const result = await deduplicateFirebaseEvents();
+    firebaseDeleted = result.deleted || 0;
     if (firebaseDeleted > 0) {
       deleted += firebaseDeleted;
+      // 重複削除後にビューを更新
+      updateViews();
     }
   } catch (error) {
   }
@@ -1490,10 +1494,7 @@ function startAutomaticGoogleSync() {
     }
   };
 
-  googleSyncTimeoutId = setTimeout(async () => {
-    googleSyncTimeoutId = null;
-    await syncTask('initial-delay');
-  }, INITIAL_GOOGLE_SYNC_DELAY_MS);
+  // 初期同期はDOMContentLoadedで既に実行済みなので、定期同期のみ設定
   googleSyncIntervalId = setInterval(() => syncTask('interval'), GOOGLE_SYNC_INTERVAL_MS);
 }
 
@@ -3443,7 +3444,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     return;
   }
 
-  // イベントを読み込み
+  // イベントを読み込み（重複削除まで完了）
   await loadEvents();
 
   // イベントリスナーを登録
@@ -3454,9 +3455,24 @@ document.addEventListener('DOMContentLoaded', async function() {
   // 週次グリッドでのクリック追加を有効化
   enableWeekGridClickToCreate();
 
+  // 初期化完了後にGoogle同期を実行（ローディング継続）
+  try {
+    if (GOOGLE_APPS_SCRIPT_ENDPOINT && isFirebaseEnabled) {
+      await fetchGoogleCalendarEvents({ silent: false });
+      await syncEventsToGoogleCalendar({ silent: false });
+    }
+  } catch (error) {
+    // 同期失敗してもアプリは動作し続ける
+    console.log('Initial Google sync failed:', error);
+  }
+
+  // すべてのデータ準備が完了してからビューを更新
+  updateViews();
+
+  // 自動同期を設定（定期実行のみ）
   startAutomaticGoogleSync();
 
-  // 初期化完了後にローディング画面を非表示
+  // すべての初期化処理完了後にローディング画面を非表示
   hideLoading();
 });
 
