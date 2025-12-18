@@ -2419,8 +2419,10 @@ function formatDate(date, format) {
 // テキストを指定長で切り詰める
 function truncateText(text, maxLength) {
   if (!text || typeof text !== 'string') return '';
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength) + '...';
+  // 1文字多く表示して"..."を付けない
+  const extendedMaxLength = maxLength + 1;
+  if (text.length <= extendedMaxLength) return text;
+  return text.substring(0, extendedMaxLength);
 }
 
 // 時間フォーマット
