@@ -619,14 +619,7 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
   if (!silent) {
     showMessage('Googleカレンダーを更新しました。', 'success', 4000);
   }
-    '[Google Sync] 更新完了',
-    `upserts=${filteredUpserts.length}`,
-    `deletes=${filteredDeletes.length}`,
-    `created=${Number(result?.created) || 0}`,
-    `updated=${Number(result?.updated) || 0}`,
-    `deleted=${Number(result?.deleted) || 0}`,
-    `skipped=${Number(result?.skipped) || 0}`
-  );
+
   return {
     created: Number(result?.created) || 0,
     updated: Number(result?.updated) || 0,
@@ -810,8 +803,6 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   } else {
     // Always hide loading, even in silent mode
     hideLoading();
-      `Google fetch: total=${googleEvents.length} created=${created} updated=${updated} deleted=${deleted}`
-    );
   }
   return { created, updated, deleted: deleted || 0, total: googleEvents.length };
 }
@@ -911,9 +902,6 @@ async function deduplicateFirebaseEvents() {
 
     // Google由来が1つ以上ある場合、ローカルを削除
     if (googleEvents.length > 0) {
-      const dateLabel = formatDateOnly(duplicates[0].startTime) || '';
-        `[Firebase重複チェック] "${duplicates[0].title || '(無題)'}" (${dateLabel}) -> ${duplicates.length}件 (Google:${googleEvents.length}, ローカル:${localEvents.length})`
-      );
 
       // Google由来が複数ある場合、1つだけ残す（最新のもの）
       if (googleEvents.length > 1) {
@@ -928,8 +916,6 @@ async function deduplicateFirebaseEvents() {
             const deletedOk = await deleteEvent(googleEvents[i].id, { syncGoogle: false });
             if (deletedOk) {
               deleted += 1;
-                `[Firebase重複削除] Google由来の重複を削除: "${googleEvents[i].title || '(無題)'}" (${googleEvents[i].id})`
-              );
             }
           } catch (error) {
           }
@@ -942,8 +928,6 @@ async function deduplicateFirebaseEvents() {
           const deletedOk = await deleteEvent(localEvent.id, { syncGoogle: false });
           if (deletedOk) {
             deleted += 1;
-              `[Firebase重複削除] ローカルイベントを削除: "${localEvent.title || '(無題)'}" (${localEvent.id}) - Google由来を優先`
-            );
           }
         } catch (error) {
         }
@@ -957,16 +941,12 @@ async function deduplicateFirebaseEvents() {
           return bTime - aTime; // 新しい順
         });
         const dateLabel = formatDateOnly(localEvents[0].startTime) || '';
-          `[Firebase重複チェック] ローカルのみ "${localEvents[0].title || '(無題)'}" (${dateLabel}) -> ${localEvents.length}件`
-        );
         // 最新以外を削除
         for (let i = 1; i < localEvents.length; i++) {
           try {
             const deletedOk = await deleteEvent(localEvents[i].id, { syncGoogle: false });
             if (deletedOk) {
               deleted += 1;
-                `[Firebase重複削除] ローカル重複を削除: "${localEvents[i].title || '(無題)'}" (${localEvents[i].id})`
-              );
             }
           } catch (error) {
           }
@@ -1062,9 +1042,6 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
       }
       const shouldDeleteAll = keeperIds.size === 0;
 
-        `[Google Sync] 重複チェック: "${normalized.title || '(無題)'}" (${dateLabel}) -> ${duplicates.length}件`
-      );
-
       if (duplicates.length > 0) {
         const survivors = [];
         for (const duplicate of duplicates) {
@@ -1078,8 +1055,6 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
             if (deletedOk) {
               deleted += 1;
               eventsById.delete(duplicate.id);
-                `[Google Sync] 重複削除: "${duplicate.title || '(無題)'}" (${duplicate.id}) - Google由来を優先`
-              );
             } else {
               survivors.push(duplicate);
             }
@@ -2566,9 +2541,7 @@ function getAllowedDateRanges() {
 
 function logAllowedRanges(label) {
   const { rangeStart, rangeEnd } = getAllowedDateRanges();
-    `${label} target range:`,
-    `${formatDateOnly(rangeStart)}〜${formatDateOnly(rangeEnd)}`
-  );
+  // Logging removed for production
 }
 
 // イベントが許可された範囲内にあるかチェック（日を跨ぐイベントも考慮）
