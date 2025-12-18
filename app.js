@@ -2318,6 +2318,12 @@ function createMonthDayElement(date, currentMonth) {
       time.textContent = isAllDayEvent(event) ? '' : formatTime(event.startTime);
       if (!time.textContent) time.classList.add('hidden');
 
+      // モバイル版の月表示では時間を非表示
+      const isMobile = window.innerWidth <= 640;
+      if (isMobile && currentView === 'month') {
+        time.classList.add('hidden');
+      }
+
       const title = document.createElement('span');
       title.className = 'month-event-title';
       // 月次ビューでは短く表示（最大15文字）
