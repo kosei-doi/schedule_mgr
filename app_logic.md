@@ -83,7 +83,7 @@ flowchart TD
     F --> G
 
     G --> H{バリデーション}
-    H -->|成功| I[addEvent() - Firebase保存]
+    H -->|成功| I["addEvent() - Firebase保存"]
     H -->|失敗| J[エラーメッセージ表示]
 
     I --> K{Google同期設定?}
@@ -114,7 +114,7 @@ flowchart TD
     H -->|変更なし| I[モーダル閉じる]
     H -->|変更あり| J[バリデーション]
 
-    J -->|成功| K[updateEvent() - Firebase更新]
+    J -->|成功| K["updateEvent() - Firebase更新"]
     J -->|失敗| L[エラーメッセージ表示]
 
     K --> M{Google同期設定?}
