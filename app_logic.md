@@ -43,18 +43,19 @@ sequenceDiagram
     B->>B: DOMContentLoaded発火
     B->>B: showLoading() - ローディング開始
 
-    B->>F: Firebase初期化待機 (最大10秒)
+    B->>F: Firebase初期化待機 (最大10秒 - 実際のタイムアウト)
     alt Firebase準備完了
         F->>B: 初期化成功
         B->>F: loadEvents() - 全イベント取得
         F->>B: イベントデータ返却
-        B->>B: deduplicateFirebaseEvents() - 重複削除
+        B->>B: deduplicateFirebaseEvents() - 重複削除（1回目）
         B->>B: updateViews() - ビュー更新
 
-        B->>G: fetchGoogleCalendarEvents() - Googleイベント取得
+        B->>G: fetchGoogleCalendarEvents() - Googleからイベント取得
         G->>B: Googleイベント返却
-        B->>G: syncEventsToGoogleCalendar() - 同期実行
+        B->>G: syncEventsToGoogleCalendar() - Firebase→Google同期実行
         G->>B: 同期完了
+        B->>B: deduplicateFirebaseEvents()実行（2回目）
 
         B->>B: setupEventListeners() - イベントリスナー設定
         B->>B: startAutomaticGoogleSync() - 自動同期開始
@@ -150,6 +151,10 @@ flowchart TD
 ```
 
 ### 重複削除処理
+
+**実行タイミング:**
+- Firebase初期化時（loadEvents()内）
+- Google同期時（syncEventsToGoogleCalendar()内）
 
 ```mermaid
 flowchart TD
@@ -276,6 +281,9 @@ classDiagram
 - `renderWeekView()` - 週次ビュー描画
 - `renderMonthView()` - 月次ビュー描画
 - `populateEventElement()` - イベント要素生成
+- `enableDayGridClickToCreate()` - 日次ビュークリック作成
+- `enableWeekGridClickToCreate()` - 週次ビュークリック作成
+- `openAllDayCreateModal()` - 終日イベント作成モーダル
 
 ### ユーティリティ
 - `calculateMaxCharsForWidth()` - 表示幅に基づく文字数計算
