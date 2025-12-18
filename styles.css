@@ -1713,3 +1713,87 @@ body.modal-open {
   font-size: var(--text-sm);
 }
 
+/* ===========================================
+   MOBILE ZOOM PREVENTION
+   =========================================== */
+
+/* Prevent zoom on input focus for mobile devices */
+@media screen and (max-width: 768px) {
+  /* Prevent zoom on input focus */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="search"],
+  textarea,
+  select {
+    font-size: 16px !important; /* Prevents zoom on iOS Safari */
+    transform: scale(1); /* Reset any scaling */
+    transform-origin: left top;
+  }
+
+  /* Additional input focus prevention */
+  input:focus,
+  textarea:focus,
+  select:focus {
+    -webkit-appearance: none;
+    -webkit-text-size-adjust: 100%;
+    -webkit-user-select: text;
+    outline: none;
+    font-size: 16px !important;
+  }
+
+  /* Prevent double-tap zoom */
+  * {
+    touch-action: manipulation;
+  }
+
+  /* Prevent text selection zoom on iOS */
+  body {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  }
+
+  /* Allow text selection in inputs and textareas */
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+/* Additional viewport and zoom controls */
+html {
+  -webkit-text-size-adjust: 100%; /* Prevent font scaling on orientation change */
+  -ms-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Prevent pinch-to-zoom gestures */
+body {
+  touch-action: pan-x pan-y; /* Allow scrolling but prevent zoom */
+  overscroll-behavior: none; /* Prevent bounce scrolling */
+}
+
+/* iOS Safari specific fixes */
+@supports (-webkit-touch-callout: none) {
+  /* iOS specific styles */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="search"],
+  textarea,
+  select {
+    -webkit-appearance: none;
+    -webkit-text-size-adjust: 100%;
+    font-size: 16px !important;
+  }
+}
+

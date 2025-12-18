@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>スケジュール管理アプリ</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='faviconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23faviconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23faviconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23faviconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23faviconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23faviconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23faviconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23faviconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
     <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='appIconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23appIconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23appIconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -43,6 +43,47 @@
         const db = getDatabase(app);
 
         window.firebase = { app, analytics, db, ref, set, onValue, onChildAdded, onChildChanged, onChildRemoved, push, update, remove, get };
+
+        // Mobile Zoom Prevention
+        (function() {
+            // Prevent zoom on input focus for mobile devices
+            function preventZoom() {
+                const viewport = document.querySelector('meta[name=viewport]');
+                if (viewport) {
+                    viewport.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
+                }
+            }
+
+            // Apply zoom prevention immediately
+            preventZoom();
+
+            // Re-apply on orientation change
+            window.addEventListener('orientationchange', function() {
+                setTimeout(preventZoom, 500);
+            });
+
+            // Prevent zoom on focus for iOS
+            document.addEventListener('focusin', function(e) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+                    e.target.style.fontSize = '16px';
+                }
+            });
+
+            // Reset viewport on page load and visibility change
+            document.addEventListener('DOMContentLoaded', preventZoom);
+            document.addEventListener('visibilitychange', function() {
+                if (!document.hidden) {
+                    preventZoom();
+                }
+            });
+
+            // Additional iOS-specific prevention
+            if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+                window.addEventListener('gesturestart', function(e) {
+                    e.preventDefault();
+                });
+            }
+        })();
     </script>
 
     <div class="app">
