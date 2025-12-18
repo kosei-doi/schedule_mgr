@@ -4198,12 +4198,27 @@ function attachResizeHandlers() {
       // 新しい時間を計算
       let newStartTime = ev.startTime;
       let newEndTime = ev.endTime;
-      
-      if (currentResizing === 'move') {
+
+      // モバイルではリサイズを無効化
+      if (isMobile && (currentResizing === 'top' || currentResizing === 'bottom')) {
+        return; // リサイズ操作は無視
+      }
+
+      if (currentResizing === 'top') {
+        const newStart = new Date(new Date(ev.startTime).getTime() + minutesDelta * 60000);
+        if (newStart < new Date(ev.endTime)) {
+          newStartTime = formatDateTimeLocal(newStart);
+        }
+      } else if (currentResizing === 'bottom') {
+        const newEnd = new Date(new Date(ev.endTime).getTime() + minutesDelta * 60000);
+        if (newEnd > new Date(ev.startTime)) {
+          newEndTime = formatDateTimeLocal(newEnd);
+        }
+      } else if (currentResizing === 'move') {
         // ドラッグ移動の処理
         const newStart = new Date(new Date(ev.startTime).getTime() + minutesDelta * 60000);
         const newEnd = new Date(new Date(ev.endTime).getTime() + minutesDelta * 60000);
-        
+
         // 0時より前には移動できない（VISIBLE_START_HOURを考慮）
         const newStartMinutes = newStart.getHours() * 60 + newStart.getMinutes();
         const minAllowedMinutes = VISIBLE_START_HOUR * 60;
