@@ -4,8 +4,31 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>スケジュール管理アプリ</title>
+
+    <!-- iOS App Configuration -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="スケジュール">
+    <meta name="application-name" content="スケジュール管理アプリ">
+
+    <!-- Web App Manifest -->
+    <link rel="manifest" href="site.webmanifest">
+
+    <!-- Theme Color -->
+    <meta name="theme-color" content="#3b82f6">
+    <meta name="msapplication-TileColor" content="#3b82f6">
+
+    <!-- iOS Splash Screens (Startup Images) -->
+    <link rel="apple-touch-startup-image" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='1136' viewBox='0 0 640 1136' fill='none'%3E%3Crect width='640' height='1136' fill='%23ffffff'/%3E%3Ctext x='320' y='568' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='750' height='1334' viewBox='0 0 750 1334' fill='none'%3E%3Crect width='750' height='1334' fill='%23ffffff'/%3E%3Ctext x='375' y='667' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1125' height='2436' viewBox='0 0 1125 2436' fill='none'%3E%3Crect width='1125' height='2436' fill='%23ffffff'/%3E%3Ctext x='562.5' y='1218' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='828' height='1792' viewBox='0 0 828 1792' fill='none'%3E%3Crect width='828' height='1792' fill='%23ffffff'/%3E%3Ctext x='414' y='896' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='faviconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23faviconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23faviconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23faviconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23faviconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23faviconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23faviconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23faviconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='appIconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23appIconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23appIconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
+    <!-- iOS App Icons (Multiple Sizes) -->
+    <link rel="apple-touch-icon" sizes="180x180" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='appIconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23appIconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23appIconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" sizes="152x152" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='152' height='152' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='appIconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23appIconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23appIconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" sizes="120x120" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='appIconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23appIconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23appIconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" sizes="76x76" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='76' height='76' viewBox='0 0 28 28' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='appIconGradient' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%233b82f6;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%232563eb;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='4' y='6' width='16' height='16' rx='2' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 6 L4 8 Q4 6 6 6 L10 6' fill='none' stroke='url(%23appIconGradient)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M4 8 L4 10 Q4 8 6 8 L10 8' fill='none' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='0.6'/%3E%3Cline x1='4' y1='11' x2='20' y2='11' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='20' cy='7' r='3.5' fill='none' stroke='url(%23appIconGradient)' stroke-width='2'/%3E%3Cline x1='20' y1='7' x2='20' y2='4.5' stroke='url(%23appIconGradient)' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='20' y1='7' x2='22.2' y2='7' stroke='url(%23appIconGradient)' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -83,6 +106,123 @@
                     e.preventDefault();
                 });
             }
+        })();
+
+        // PWA Installation and iOS Home Screen Detection
+        (function() {
+            let deferredPrompt;
+            const installButton = document.createElement('button');
+            installButton.id = 'install-button';
+            installButton.innerHTML = '📱 ホーム画面に追加';
+            installButton.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: #3b82f6;
+                color: white;
+                border: none;
+                border-radius: 50px;
+                padding: 12px 20px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+                z-index: 1000;
+                display: none;
+                transition: all 0.3s ease;
+            `;
+
+            installButton.onmouseover = () => installButton.style.transform = 'scale(1.05)';
+            installButton.onmouseout = () => installButton.style.transform = 'scale(1)';
+
+            document.body.appendChild(installButton);
+
+            // Detect if app is running in standalone mode (installed)
+            function isStandalone() {
+                return window.matchMedia('(display-mode: standalone)').matches ||
+                       window.navigator.standalone === true;
+            }
+
+            // Hide install button if already installed
+            if (isStandalone()) {
+                installButton.style.display = 'none';
+            }
+
+            // Listen for PWA install prompt
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredPrompt = e;
+
+                // Show install button only if not already installed
+                if (!isStandalone()) {
+                    installButton.style.display = 'block';
+                }
+            });
+
+            // Handle install button click
+            installButton.addEventListener('click', async () => {
+                if (deferredPrompt) {
+                    deferredPrompt.prompt();
+                    const { outcome } = await deferredPrompt.userChoice;
+
+                    if (outcome === 'accepted') {
+                        console.log('User accepted the install prompt');
+                        installButton.style.display = 'none';
+                    }
+
+                    deferredPrompt = null;
+                } else {
+                    // Fallback for iOS
+                    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+                        alert('Safariで「共有」ボタンをタップし、「ホーム画面に追加」を選択してください。');
+                    } else {
+                        alert('インストールできません。ブラウザのインストールオプションを確認してください。');
+                    }
+                }
+            });
+
+            // Detect iOS and show install instructions
+            if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !isStandalone()) {
+                // Show iOS install hint after a delay
+                setTimeout(() => {
+                    if (!deferredPrompt && !isStandalone()) {
+                        const iosHint = document.createElement('div');
+                        iosHint.innerHTML = `
+                            <div style="
+                                position: fixed;
+                                bottom: 80px;
+                                right: 20px;
+                                background: rgba(0,0,0,0.8);
+                                color: white;
+                                padding: 12px 16px;
+                                border-radius: 8px;
+                                font-size: 12px;
+                                max-width: 200px;
+                                z-index: 999;
+                                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                            ">
+                                📱 iPhoneの方：<br>
+                                共有ボタン →<br>
+                                ホーム画面に追加
+                            </div>
+                        `;
+                        document.body.appendChild(iosHint);
+
+                        // Hide hint after 10 seconds
+                        setTimeout(() => {
+                            if (iosHint.parentNode) {
+                                iosHint.remove();
+                            }
+                        }, 10000);
+                    }
+                }, 3000);
+            }
+
+            // Hide install button when app is installed
+            window.addEventListener('appinstalled', () => {
+                installButton.style.display = 'none';
+                console.log('PWA was installed');
+            });
         })();
     </script>
 
