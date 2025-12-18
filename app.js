@@ -227,6 +227,20 @@ function checkFirebase() {
   return false;
 }
 
+// Firebaseの準備を待機する関数
+async function waitForFirebase(maxWaitMs = 5000) {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWaitMs) {
+    if (checkFirebase()) {
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  return false;
+}
+
 // 特定のイベントが影響するビューだけを更新（日を跨ぐイベントも考慮）
 function updateViewsForEvent(event) {
   if (!event || !event.id) return;
@@ -414,11 +428,13 @@ async function loadEvents() {
     try {
     const key = snapshot.key;
     if (!key) return;
-    
+
     const newEvent = normalizeEventFromSnapshot(snapshot, key);
-    if (!isEventInAllowedRange(newEvent, allowedRanges)) return;
-    
-    // 既存のイベントをチェック
+    if (!isEventInAllowedRange(newEvent, allowedRanges)) {
+      return;
+    }
+
+    // 既存のイベントをチェック（重複防止）
     const existingIndex = events.findIndex(e => e.id === key);
     if (existingIndex === -1) {
       events.push(newEvent);
@@ -430,7 +446,11 @@ async function loadEvents() {
         return aTime - bTime;
       });
       updateViewsForEvent(newEvent);
-      }
+    } else {
+      // 既存イベントを更新（念のため）
+      events[existingIndex] = newEvent;
+      updateViewsForEvent(newEvent);
+    }
     } catch (error) {
       // エラーが発生してもアプリを停止させない
     }
@@ -517,29 +537,62 @@ async function loadEvents() {
 }
 
 function buildSyncEventPayload(event) {
-  const startIso = event.startTime ? new Date(event.startTime).toISOString() : null;
-  const endIso = event.endTime ? new Date(event.endTime).toISOString() : null;
-  return {
-    id: event.id || null,
-    title: event.title || '',
-    description: event.description || '',
-    location: event.location || '',
-    startDateTime: startIso,
-    endDateTime: endIso,
-    allDay: Boolean(event.allDay),
-    isTimetable: event.isTimetable === true,
-    reminderMinutes:
-      typeof event.reminderMinutes === 'number' && Number.isFinite(event.reminderMinutes)
-        ? event.reminderMinutes
-        : null,
-    color: event.color || null,
-  };
+  const isAllDay = Boolean(event.allDay);
+
+  if (isAllDay) {
+    // 終日イベントの場合：日付のみ、次の日まで
+    const startDate = event.startTime ? event.startTime.split('T')[0] : null;
+    const startDateObj = startDate ? new Date(startDate) : null;
+    const endDateObj = startDateObj ? new Date(startDateObj) : null;
+    if (endDateObj) {
+      endDateObj.setDate(endDateObj.getDate() + 1); // 次の日
+    }
+    const endDate = endDateObj ? endDateObj.toISOString().split('T')[0] : null;
+
+    return {
+      id: event.id || null,
+      title: event.title || '',
+      description: event.description || '',
+      location: event.location || '',
+      startDate: startDate,
+      endDate: endDate,
+      allDay: true,
+      isTimetable: event.isTimetable === true,
+      reminderMinutes:
+        typeof event.reminderMinutes === 'number' && Number.isFinite(event.reminderMinutes)
+          ? event.reminderMinutes
+          : null,
+      color: event.color || null,
+    };
+  } else {
+    // 通常イベントの場合：日時
+    const startIso = event.startTime ? new Date(event.startTime).toISOString() : null;
+    const endIso = event.endTime ? new Date(event.endTime).toISOString() : null;
+
+    return {
+      id: event.id || null,
+      title: event.title || '',
+      description: event.description || '',
+      location: event.location || '',
+      startDateTime: startIso,
+      endDateTime: endIso,
+      allDay: false,
+      isTimetable: event.isTimetable === true,
+      reminderMinutes:
+        typeof event.reminderMinutes === 'number' && Number.isFinite(event.reminderMinutes)
+          ? event.reminderMinutes
+          : null,
+      color: event.color || null,
+    };
+  }
 }
 
 async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = false } = {}) {
   if (!GOOGLE_APPS_SCRIPT_ENDPOINT) {
     const message = 'Google Apps Script の Web アプリ URL が設定されていません。';
-    showMessage(message, 'error', 6000);
+    if (!silent) {
+      showMessage(message, 'error', 6000);
+    }
     throw new Error(message);
   }
 
@@ -597,7 +650,9 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
     const message = `Googleカレンダー更新に失敗しました (${response.status}) ${errorText || ''}`.trim();
-    showMessage(message, 'error', 6000);
+    if (!silent) {
+      showMessage(message, 'error', 6000);
+    }
     throw new Error(message);
   }
 
@@ -606,13 +661,17 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
     result = await response.json();
   } catch (error) {
     const message = 'Googleカレンダー応答の解析に失敗しました。';
-    showMessage(message, 'error', 6000);
+    if (!silent) {
+      showMessage(message, 'error', 6000);
+    }
     throw error;
   }
 
   if (result?.success === false) {
     const message = result?.message || 'Googleカレンダー更新に失敗しました。';
-    showMessage(message, 'error', 6000);
+    if (!silent) {
+      showMessage(message, 'error', 6000);
+    }
     throw new Error(message);
   }
 
@@ -1195,6 +1254,13 @@ function normalizeForCompare(value, key) {
 // イベントを追加（combiと同じロジック）
 async function addEvent(event, options = {}) {
   const { syncGoogle = true } = options;
+
+  // Firebaseの準備を待機
+  if (!await waitForFirebase()) {
+    const message = 'Firebaseの初期化がタイムアウトしました。ページを再読み込みしてください。';
+    showMessage(message, 'error', 6000);
+    return null;
+  }
   const normalizedStart = normalizeEventDateTimeString(event.startTime);
   const normalizedEnd = normalizeEventDateTimeString(event.endTime);
   const newEvent = {
@@ -1225,11 +1291,17 @@ async function addEvent(event, options = {}) {
     await window.firebase.set(newEventRef, payload);
     const newId = newEventRef.key;
 
-    if (syncGoogle && newId && newEvent.isTimetable !== true) {
+    if (!newId) {
+      await window.firebase.remove(newEventRef).catch(() => {});
+      throw new Error('Firebase push failed: no key returned');
+    }
+
+    if (syncGoogle && newEvent.isTimetable !== true) {
       try {
+        // Google同期時は常にローディング画面を表示
         await mirrorMutationsToGoogle({
           upserts: [{ ...newEvent, id: newId }],
-          silent: true,
+          silent: false,
         });
       } catch (error) {
         await window.firebase.remove(newEventRef).catch(() => {});
@@ -1247,6 +1319,13 @@ async function addEvent(event, options = {}) {
 // イベントを更新（combiと同じロジック）
 async function updateEvent(id, event, options = {}) {
   const { syncGoogle = true } = options;
+
+  // Firebaseの準備を待機
+  if (!await waitForFirebase()) {
+    const message = 'Firebaseの初期化がタイムアウトしました。ページを再読み込みしてください。';
+    showMessage(message, 'error', 6000);
+    return false;
+  }
   const existingEvent = (Array.isArray(events) ? events.find(e => e.id === id) : null) || {};
   const startSource = event.startTime ?? existingEvent.startTime ?? '';
   const endSource = event.endTime ?? existingEvent.endTime ?? '';
@@ -1286,13 +1365,14 @@ async function updateEvent(id, event, options = {}) {
 
   if (syncGoogle && updatedEvent.isTimetable !== true) {
     try {
+      // Google同期時は常にローディング画面を表示
       await mirrorMutationsToGoogle({
         upserts: [{ ...updatedEvent, id }],
-        silent: true,
+        silent: false,
       });
     } catch (error) {
       // Google同期が失敗してもFirebaseの更新は成功しているので、エラーをスローしない
-      // ユーザーには通知しない（silent: trueの意図）
+      // ユーザーには通知しない（silent: falseの意図）
     }
   }
 
@@ -1321,13 +1401,14 @@ async function deleteEvent(id, options = {}) {
   if (syncGoogle && existingEvent?.isTimetable !== true) {
     try {
       // 削除時にイベント情報（日付とタイトル）も送信して、IDが一致しない場合でもマッチングできるようにする
+      // Google同期時は常にローディング画面を表示
       await mirrorMutationsToGoogle({
         deletes: existingEvent ? [existingEvent] : [id],
-        silent: true,
+        silent: false,
       });
     } catch (error) {
       // Google同期が失敗してもFirebaseの削除は成功しているので、エラーをスローしない
-      // ユーザーには通知しない（silent: trueの意図）
+      // ユーザーには通知しない（silent: falseの意図）
     }
   }
 
@@ -1401,8 +1482,8 @@ function startAutomaticGoogleSync() {
     if (googleSyncInFlight) return;
     googleSyncInFlight = true;
     try {
-      await fetchGoogleCalendarEvents({ silent: true });
-      await syncEventsToGoogleCalendar({ silent: true });
+      await fetchGoogleCalendarEvents({ silent: false });
+      await syncEventsToGoogleCalendar({ silent: false });
     } catch (error) {
     } finally {
       googleSyncInFlight = false;
@@ -1567,7 +1648,7 @@ function renderDayView() {
       const safeBTime = Number.isNaN(bTime) ? 0 : bTime;
       return safeATime - safeBTime;
     });
-    syncEventElements(allDayContainer, sortedAllDay, viewCaches.day.allDay, { variant: 'all-day' });
+    syncEventElements(allDayContainer, sortedAllDay, viewCaches.day.allDay, { variant: 'all-day', currentView: 'day', isMobile: window.innerWidth <= 768 });
   }
   
   const sortedTimed = [...timedEvents].sort((a, b) => {
@@ -1584,6 +1665,8 @@ function renderDayView() {
   });
 
   syncEventElements(container, sortedTimed, viewCaches.day.timed, {
+    currentView: 'day',
+    isMobile: window.innerWidth <= 768,
     positionEvent: (element, event) => {
       positionEventInDayView(element, event, currentDate);
       applyOverlapStyles(element, groupMap.get(event.id));
@@ -1642,7 +1725,7 @@ function renderWeekView() {
         const safeBTime = Number.isNaN(bTime) ? 0 : bTime;
         return safeATime - safeBTime;
       });
-      syncEventElements(allDayColumn, sortedAllDay, viewCaches.week.allDay[i], { variant: 'all-day' });
+      syncEventElements(allDayColumn, sortedAllDay, viewCaches.week.allDay[i], { variant: 'all-day', currentView: 'week', isMobile: window.innerWidth <= 768 });
     }
 
     const sortedTimed = [...timedEvents].sort((a, b) => {
@@ -1659,13 +1742,22 @@ function renderWeekView() {
     });
     
     syncEventElements(eventsContainer, sortedTimed, viewCaches.week.timed[i], {
+      currentView: 'week',
+      isMobile: window.innerWidth <= 768,
       positionEvent: (element, event) => {
         positionEventInDayView(element, event, dayDate);
         applyOverlapStyles(element, groupMap.get(event.id));
       },
     });
   }
-  
+
+  // モバイル版の場合、終日イベントのタイトル文字数を再計算
+  if (window.innerWidth <= 768) {
+    setTimeout(() => {
+      updateAllDayEventTitles();
+    }, 100);
+  }
+
   // リサイズハンドラーをアタッチ
   attachResizeHandlers();
 }
@@ -1703,7 +1795,7 @@ function calculateEventGroups(dayEvents) {
   return groups;
 }
 
-function getEventRenderSignature(event, { variant } = {}) {
+function getEventRenderSignature(event, { variant, currentView, isMobile } = {}) {
   return [
     event.id || '',
     event.title || '',
@@ -1715,15 +1807,19 @@ function getEventRenderSignature(event, { variant } = {}) {
     event.isTimetable === true ? '1' : '0',
     event.reminderMinutes ?? '',
     variant || '',
+    currentView || '',
+    isMobile === true ? '1' : '0',
+    variant || '',
   ].join('|');
 }
 
 function populateEventElement(element, event, options = {}) {
-  const { variant } = options;
+  const { variant, currentView, isMobile } = options;
   const isAllDay = variant === 'all-day' || isAllDayEvent(event);
   element.className = 'event-item';
   if (isAllDay) element.classList.add('all-day');
   if (event.isTimetable === true) element.classList.add('timetable-event');
+  if (isMobile && currentView === 'week' && !isAllDay) element.classList.add('mobile-week');
   element.style.backgroundColor = event.color || '#3b82f6';
   element.dataset.eventId = event.id;
   if (event.isTimetable === true) {
@@ -1739,7 +1835,22 @@ function populateEventElement(element, event, options = {}) {
   element.tabIndex = 0;
   element.setAttribute('role', 'button');
   const fullTitle = event.title || '(無題)';
-  const displayTitle = truncateText(fullTitle, 30);
+
+  // モバイル版の週次ビューでは改行を追加してタイトルが見えるようにする
+  // ただし、終日イベントの場合は改行処理を適用しない
+  let displayTitle = fullTitle;
+  if (isMobile && currentView === 'week' && !isAllDay) {
+    // 日本語のタイトルを適切に改行（約8文字ごとに改行）
+    displayTitle = fullTitle.replace(/(.{8})/g, '$1\n').trim();
+    if (displayTitle.endsWith('\n')) {
+      displayTitle = displayTitle.slice(0, -1);
+    }
+  } else {
+    // 終日イベントの場合、表示幅に基づいて動的に文字数を制限
+    // モバイル版週次ビューの場合は後で再計算するため、ここでは仮の値を使用
+    const maxLength = isAllDay && isMobile && currentView === 'week' ? 5 : (isAllDay ? 31 : 30);
+    displayTitle = truncateText(fullTitle, maxLength);
+  }
 
   if (isAllDay) {
     element.setAttribute('aria-label', `${fullTitle} (終日)`);
@@ -1750,16 +1861,20 @@ function populateEventElement(element, event, options = {}) {
     const startLabel = event.startTime ? formatTime(event.startTime) : '--:--';
     const endLabel = event.endTime ? formatTime(event.endTime) : '--:--';
     element.setAttribute('aria-label', `${fullTitle}, ${startLabel}から${endLabel}`);
+
+    // モバイル版の週次ビューでは時間を非表示
+    const hideTime = isMobile && currentView === 'week';
+
     element.innerHTML = `
       <div class="resize-handle top"></div>
       <div class="event-title">${escapeHtml(displayTitle)}</div>
-      <div class="event-time">${startLabel} - ${endLabel}</div>
+      ${hideTime ? '' : `<div class="event-time">${startLabel} - ${endLabel}</div>`}
       <div class="resize-handle bottom"></div>
     `;
   }
 
   delete element.dataset.resizeBound;
-  element.dataset.renderSignature = getEventRenderSignature(event, { variant });
+  element.dataset.renderSignature = getEventRenderSignature(event, { variant, currentView, isMobile });
 }
 
 function bindEventElementInteractions(element) {
@@ -1799,20 +1914,20 @@ function applyOverlapStyles(element, groupInfo) {
   element.style.right = `${100 - (leftPercent + widthPercent)}%`;
 }
 
-function syncEventElements(container, events, cacheMap, { variant, positionEvent, positionContext } = {}) {
+function syncEventElements(container, events, cacheMap, { variant, positionEvent, positionContext, currentView, isMobile } = {}) {
   if (!container || !Array.isArray(events)) return;
   const processedIds = new Set();
 
   events.forEach((event, index) => {
     if (!event?.id) return;
-    const signature = getEventRenderSignature(event, { variant });
+    const signature = getEventRenderSignature(event, { variant, currentView, isMobile });
     const cached = cacheMap.get(event.id);
     let element = cached?.element;
     if (!element) {
-      element = createEventElement(event, { variant });
+      element = createEventElement(event, { variant, currentView, isMobile });
       cacheMap.set(event.id, { element, signature });
     } else if (cached.signature !== signature) {
-      populateEventElement(element, event, { variant });
+      populateEventElement(element, event, { variant, currentView, isMobile });
       cacheMap.set(event.id, { element, signature });
     } else {
       element.dataset.eventId = event.id;
@@ -2320,12 +2435,8 @@ function createMonthDayElement(date, currentMonth) {
 
       // モバイル版の月表示では時間を非表示
       const isMobile = window.innerWidth <= 768;
-      console.log(`[MONTH EVENT] currentView: ${currentView}, isMobile: ${isMobile}, window.innerWidth: ${window.innerWidth}`);
       if (isMobile && currentView === 'month') {
-        console.log('[MONTH EVENT] Hiding time for mobile month view');
         time.classList.add('hidden');
-      } else {
-        console.log(`[MONTH EVENT] Showing time - isMobile: ${isMobile}, currentView: ${currentView}`);
       }
 
       const title = document.createElement('span');
@@ -2402,6 +2513,48 @@ function updateViews() {
 }
 
 // ユーティリティ関数
+
+// 要素の幅に基づいて表示可能な文字数を計算
+function calculateMaxCharsForWidth(element, fontSize = 14) {
+  if (!element) return 30; // デフォルト値
+
+  const rect = element.getBoundingClientRect();
+  const padding = 8; // 左右のパディングを考慮
+  const availableWidth = rect.width - (padding * 2);
+
+  if (availableWidth <= 0) return 1; // 最小1文字
+
+  // 日本語の平均文字幅を考慮（約14px前後）
+  const avgCharWidth = fontSize * 0.8; // フォントサイズの0.8倍を平均文字幅とする
+  const maxChars = Math.floor(availableWidth / avgCharWidth);
+
+  return Math.max(1, Math.min(maxChars, 50)); // 1-50文字の範囲に制限
+}
+
+// 週次ビューの終日イベントタイトルを再計算
+function updateAllDayEventTitles() {
+  const allDayColumns = document.querySelectorAll('.week-all-day-columns .all-day-column');
+
+  allDayColumns.forEach(column => {
+    const eventElements = column.querySelectorAll('.event-item.all-day');
+    const maxChars = calculateMaxCharsForWidth(column, 12); // 終日イベントのフォントサイズ
+
+    eventElements.forEach(eventElement => {
+      const titleElement = eventElement.querySelector('.event-title');
+      if (titleElement) {
+        const eventId = eventElement.dataset.eventId;
+        if (eventId) {
+          const event = events.find(e => e.id === eventId);
+          if (event) {
+            const fullTitle = event.title || '(無題)';
+            const displayTitle = truncateText(fullTitle, maxChars);
+            titleElement.textContent = displayTitle;
+          }
+        }
+      }
+    });
+  });
+}
 
 // 日付フォーマット
 function formatDate(date, format) {
@@ -2498,13 +2651,15 @@ function splitEventsByAllDay(eventList = []) {
 
 function applyAllDayMode(isAllDay, controls) {
   const { startInput, endInput, allDayRow } = controls;
+  const timeInputRow = safeGetElementById('timeInputRow');
+
   if (isAllDay) {
+    // 終日イベントの場合：時間入力行を非表示、日付入力行を表示
+    timeInputRow?.classList.add('hidden');
     allDayRow?.classList.remove('hidden');
-    startInput?.classList.add('readonly-input');
-    endInput?.classList.add('readonly-input');
-    startInput?.setAttribute('disabled', 'disabled');
-    endInput?.setAttribute('disabled', 'disabled');
   } else {
+    // 通常イベントの場合：時間入力行を表示、日付入力行を非表示
+    timeInputRow?.classList.remove('hidden');
     allDayRow?.classList.add('hidden');
     startInput?.classList.remove('readonly-input');
     endInput?.classList.remove('readonly-input');
@@ -3219,8 +3374,11 @@ function validateEvent(event) {
 
 
 // 初期化（combiと同じロジック）
-document.addEventListener('DOMContentLoaded', function() {
-  
+document.addEventListener('DOMContentLoaded', async function() {
+
+  // 初期化中のローディング画面を表示
+  showLoading('スケジュールマネージャーを起動中...');
+
   // Quill editor を初期化（拡張されたビジュアルエディタ）
   const descContainer = document.getElementById('eventDescription');
   if (descContainer && typeof Quill !== 'undefined') {
@@ -3277,15 +3435,17 @@ document.addEventListener('DOMContentLoaded', function() {
   } else if (descContainer) {
   }
   
-  // Firebase接続チェック
-  if (!checkFirebase()) {
-    showMessage('Firebaseに接続できません。設定を確認してから再読み込みしてください。', 'error', 6000);
+  // Firebase接続チェック（準備ができるまで待機）
+  const firebaseReady = await waitForFirebase(10000); // 10秒待機
+  if (!firebaseReady) {
+    hideLoading();
+    showMessage('Firebaseの初期化に失敗しました。ページを再読み込みしてください。', 'error', 6000);
     return;
   }
-  
+
   // イベントを読み込み
-  loadEvents();
-  
+  await loadEvents();
+
   // イベントリスナーを登録
   setupEventListeners();
 
@@ -3293,8 +3453,11 @@ document.addEventListener('DOMContentLoaded', function() {
   enableDayGridClickToCreate();
   // 週次グリッドでのクリック追加を有効化
   enableWeekGridClickToCreate();
-  
+
   startAutomaticGoogleSync();
+
+  // 初期化完了後にローディング画面を非表示
+  hideLoading();
 });
 
 window.addEventListener('beforeunload', () => {
@@ -3644,39 +3807,67 @@ function setupEventListeners() {
         
         // Firebaseに保存（成功後にローカル配列を更新）
         const newId = await addEvent(newEvent);
-        if (newId && !isFirebaseEnabled) {
-          // Firebaseが無効な場合のみローカル配列に追加
+        if (newId) {
+          // イベント作成が成功したらローカル配列に追加（リアルタイムリスナーで重複防止）
           newEvent.id = newId;
           events.push(newEvent);
         }
       } else if (editingEventId) {
         // 既存イベントを更新
+        // 終日フラグ変更時の時間処理
+        const existingEvent = events.find(e => e.id === editingEventId);
+        const wasAllDay = existingEvent?.allDay === true;
+        const isNowAllDay = event.allDay === true;
+
+        let processedEvent = { ...event };
+
+
+        if (!wasAllDay && isNowAllDay) {
+          // 通常イベントから終日イベントに変更: 日付のみに正規化
+          processedEvent.startTime = event.startTime ? event.startTime.split('T')[0] : event.startTime;
+          processedEvent.endTime = event.endTime ? event.endTime.split('T')[0] : event.startTime?.split('T')[0];
+        } else if (wasAllDay && !isNowAllDay) {
+          // 終日イベントから通常イベントに変更: 時間を追加（デフォルト9:00-10:00）
+          const datePart = event.startTime ? event.startTime.split('T')[0] : new Date().toISOString().split('T')[0];
+          processedEvent.startTime = `${datePart}T09:00:00`;
+          processedEvent.endTime = `${datePart}T10:00:00`;
+        }
+
         // Firebase更新を先に実行し、成功後にローカル配列を更新
-        await updateEvent(editingEventId, event);
+        await updateEvent(editingEventId, processedEvent);
         // ローカル配列も更新（Firebaseのリアルタイム更新で上書きされる可能性があるが、即座のUI更新のため）
         if (Array.isArray(events)) {
           const eventIndex = events.findIndex(e => e.id === editingEventId);
           if (eventIndex !== -1) {
+            const existingEvent = events[eventIndex];
+            const wasAllDay = existingEvent.allDay === true;
+            const isNowAllDay = event.allDay === true;
+
+            let startTime = processedEvent.startTime;
+            let endTime = processedEvent.endTime;
+
             events[eventIndex] = {
-              ...events[eventIndex],
+              ...existingEvent,
               title: event.title,
               description: event.description,
-              startTime: event.startTime,
-              endTime: event.endTime,
-              allDay: event.allDay === true,
+              startTime: startTime,
+              endTime: endTime,
+              allDay: isNowAllDay,
               color: event.color,
               recurrence: event.recurrence,
               recurrenceEnd: event.recurrenceEnd,
               reminderMinutes: event.reminderMinutes,
               updatedAt: new Date().toISOString()
             };
+            // ビューを即座に更新
+            updateViewsForEvent(events[eventIndex]);
           }
         }
       } else {
         // 新規イベントを作成
         const newId = await addEvent(event);
-        if (newId && !isFirebaseEnabled) {
-          // Firebaseが無効な場合のみローカル配列に追加
+        if (newId) {
+          // イベント作成が成功したらローカル配列に追加（リアルタイムリスナーで重複防止）
           const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
           events.push(newEvent);
         }

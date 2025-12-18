@@ -417,7 +417,7 @@ body {
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip; /* JavaScriptで文字数を制限するため、clipを使用 */
   min-width: 0;
   flex: 1;
 }
@@ -493,6 +493,13 @@ body {
   text-overflow: ellipsis;
   min-width: 0;
   flex-shrink: 1;
+}
+
+/* モバイル版週次ビューではタイトルを改行して表示 */
+.event-item.mobile-week .event-title {
+  white-space: pre-line;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .event-time {

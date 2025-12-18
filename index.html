@@ -6,7 +6,7 @@
     <title>スケジュール管理アプリ</title>
 
     <!-- iOS App Configuration -->
-    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="スケジュール">
     <meta name="application-name" content="スケジュール管理アプリ">
@@ -317,7 +317,7 @@
                             <label for="eventTitle">タイトル *</label>
                             <input type="text" id="eventTitle" name="title" required maxlength="100" aria-required="true">
                         </div>
-                        <div class="form-row compact-row">
+                        <div class="form-row compact-row" id="timeInputRow">
                             <div class="form-group compact">
                                 <label for="eventStartTime">開始 *</label>
                                 <input type="datetime-local" id="eventStartTime" name="startTime" required aria-required="true">
@@ -345,13 +345,13 @@
                     
                     <div class="form-section options-section">
                         <div class="form-group checkbox-group compact">
-                            <label class="checkbox-label">
+                            <label for="eventAllDay" class="checkbox-label">
                                 <input type="checkbox" id="eventAllDay" name="allDay">
                                 終日イベント
                             </label>
                         </div>
                         <div class="form-group compact">
-                            <label for="eventColor">色</label>
+                            <label>色</label>
                             <div class="color-picker" role="radiogroup" aria-label="イベントの色を選択">
                                 <input type="radio" id="color-blue" name="color" value="#3b82f6" checked>
                                 <label for="color-blue" class="color-option" style="background-color: #3b82f6;" aria-label="青"></label>
