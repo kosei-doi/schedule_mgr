@@ -3996,7 +3996,6 @@ function attachResizeHandlers() {
       resizing = 'move';
       hasDragged = false; // ドラッグ開始時にリセット
       item.classList.add('dragging');
-      console.log(`[DRAG START] Event ${id}, startY: ${startY}`);
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp, { once: true });
     }
@@ -4038,7 +4037,6 @@ function attachResizeHandlers() {
         hasDragged = true;
       }
 
-      console.log(`[DRAG MOVE] dy: ${dy}, hasDragged: ${hasDragged}, minutesDelta: ${minutesDelta}`);
       
       if (resizing === 'top') {
         const newStart = new Date(originalStart.getTime() + minutesDelta * 60000);
@@ -4120,16 +4118,13 @@ function attachResizeHandlers() {
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
-      console.log(`[MOUSE UP] Event ${id}, dy: ${dy}, hasDragged: ${currentHasDragged}, minutesDelta: ${minutesDelta}`);
 
       // クリック（ドラッグなし）は詳細モーダルを開く
       if (currentResizing === 'move' && !currentHasDragged) {
-        console.log(`[MOUSE UP] Click detected (no drag), opening modal for event ${id}`);
         showEventModal(id);
         return;
       }
 
-      console.log(`[MOUSE UP] Drag detected, saving event ${id}`);
 
       // 新しい時間を計算
       let newStartTime = ev.startTime;
@@ -4211,16 +4206,13 @@ function attachResizeHandlers() {
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
-      console.log(`[TOUCH END] Event ${id}, dy: ${dy}, hasDragged: ${currentHasDragged}, minutesDelta: ${minutesDelta}`);
 
       // クリック（ドラッグなし）は詳細モーダルを開く
       if (currentResizing === 'move' && !currentHasDragged) {
-        console.log(`[TOUCH END] Click detected (no drag), opening modal for event ${id}`);
         showEventModal(id);
         return;
       }
 
-      console.log(`[TOUCH END] Drag detected, saving event ${id}`);
 
       // 新しい時間を計算
       let newStartTime = ev.startTime;
