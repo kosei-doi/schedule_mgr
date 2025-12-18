@@ -3955,6 +3955,7 @@ function attachResizeHandlers() {
     let originalEnd = null;
     let resizing = null; // 'top' | 'bottom' | 'move'
     let originalTop = 0;
+    let hasDragged = false; // ドラッグが実際に発生したかを追跡
 
     // リサイズハンドル用のマウスダウン
     function onMouseDown(handle, edge) {
@@ -4029,6 +4030,11 @@ function attachResizeHandlers() {
       const hourHeight = getHourHeight();
       const dy = e.clientY - startY;
       const minutesDelta = Math.round(dy / hourHeight * 60 / 15) * 15; // 15分単位に丸める
+
+      // ドラッグが実際に発生したかを検知（5px以上の移動でドラッグとみなす）
+      if (Math.abs(dy) >= 5) {
+        hasDragged = true;
+      }
       
       if (resizing === 'top') {
         const newStart = new Date(originalStart.getTime() + minutesDelta * 60000);
@@ -4071,6 +4077,11 @@ function attachResizeHandlers() {
       if (!e.touches || e.touches.length === 0) return;
       const touch = e.touches[0];
       const dy = touch.clientY - startY;
+
+      // ドラッグが実際に発生したかを検知（5px以上の移動でドラッグとみなす）
+      if (Math.abs(dy) >= 5) {
+        hasDragged = true;
+      }
       
       if (resizing === 'move') {
         // ドラッグ移動のプレビュー
@@ -4085,17 +4096,19 @@ function attachResizeHandlers() {
       // イベントリスナーを確実に削除（{once: true}を使用しているが、念のため削除）
       document.removeEventListener('mousemove', onMouseMove);
       item.classList.remove('resizing', 'dragging');
-      
+
       // 状態を保存（リセット前に）
       const currentResizing = resizing;
       const currentStartY = startY;
-      
+      const currentHasDragged = hasDragged;
+
       // 状態をリセット
       resizing = null;
       startY = 0;
       originalStart = null;
       originalEnd = null;
       originalTop = 0;
+      hasDragged = false;
 
       const hourHeight = getHourHeight();
       const dy = e.clientY - currentStartY;
@@ -4104,8 +4117,8 @@ function attachResizeHandlers() {
       if (!ev) return;
 
 
-      // クリック（移動なし）は詳細モーダルを開く
-      if (currentResizing === 'move' && minutesDelta === 0) {
+      // クリック（ドラッグなし）は詳細モーダルを開く
+      if (currentResizing === 'move' && !currentHasDragged) {
         showEventModal(id);
         return;
       }
@@ -4172,13 +4185,15 @@ function attachResizeHandlers() {
       // 状態を保存（リセット前に）
       const currentResizing = resizing;
       const currentStartY = startY;
-      
+      const currentHasDragged = hasDragged;
+
       // 状態をリセット
       resizing = null;
       startY = 0;
       originalStart = null;
       originalEnd = null;
       originalTop = 0;
+      hasDragged = false;
 
       if (!e.changedTouches || e.changedTouches.length === 0) return;
       const hourHeight = getHourHeight();
@@ -4189,8 +4204,8 @@ function attachResizeHandlers() {
       if (!ev) return;
 
 
-      // クリック（移動なし）は詳細モーダルを開く
-      if (currentResizing === 'move' && minutesDelta === 0) {
+      // クリック（ドラッグなし）は詳細モーダルを開く
+      if (currentResizing === 'move' && !currentHasDragged) {
         showEventModal(id);
         return;
       }
