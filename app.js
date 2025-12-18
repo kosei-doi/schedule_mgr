@@ -23,7 +23,6 @@ const eventListeners = {
         this.listeners.splice(index, 1);
       }
     } catch (error) {
-      console.warn('Failed to remove event listener:', error);
     }
   },
   removeAll: function() {
@@ -31,7 +30,6 @@ const eventListeners = {
       try {
         listener.element.removeEventListener(listener.event, listener.handler, listener.options);
       } catch (error) {
-        console.warn('Failed to remove event listener:', error);
       }
     });
     this.listeners = [];
@@ -118,7 +116,6 @@ function showMessage(message, type = 'info', duration = 4000) {
   // 通知表示を無効化（ヘッダー下の通知は表示しない）
   // エラーのみコンソールに出力
     if (type === 'error') {
-      console.error(message);
     }
   // 通知エリアは表示しない
     return;
@@ -213,7 +210,6 @@ function hideLoading() {
 function safeGetElementById(id) {
   const element = document.getElementById(id);
   if (!element) {
-    console.warn(`Element with id "${id}" not found`);
   }
   return element;
 }
@@ -223,11 +219,9 @@ function checkFirebase() {
   try {
     if (typeof window.firebase !== 'undefined' && window.firebase.db) {
       isFirebaseEnabled = true;
-      console.log('Firebase v11 Realtime Database が有効です');
       return true;
     }
   } catch (error) {
-    console.error('Firebase が利用できません。', error);
   }
   isFirebaseEnabled = false;
   return false;
@@ -350,7 +344,6 @@ function normalizeEventFromSnapshot(snapshot, key) {
 async function loadEvents() {
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、予定を読み込めません。設定を確認してください。';
-    console.error(message);
     showMessage(message, 'error', 6000);
     return;
   }
@@ -396,16 +389,13 @@ async function loadEvents() {
         if (Number.isNaN(bTime)) return -1;
         return aTime - bTime;
       });
-      console.log('Firebaseからイベントを初回読み込み:', events.length, '件');
       
       // Firebase内の重複チェックを実行
       try {
         const { deleted } = await deduplicateFirebaseEvents();
         if (deleted > 0) {
-          console.log(`[Firebase重複削除] 初回読み込み時に ${deleted}件の重複を削除しました`);
         }
       } catch (error) {
-        console.error('[Firebase重複削除] エラー:', error);
       }
       
       updateViews();
@@ -415,7 +405,6 @@ async function loadEvents() {
       updateViews();
     }
   } catch (error) {
-    console.error('Firebaseからの初回読み込みに失敗しました。', error);
     showMessage('予定の読み込みに失敗しました。ネットワークを確認してください。', 'error', 6000);
     return;
   }
@@ -440,15 +429,12 @@ async function loadEvents() {
         if (Number.isNaN(bTime)) return -1;
         return aTime - bTime;
       });
-      console.log('Firebase: イベント追加', key);
       updateViewsForEvent(newEvent);
       }
     } catch (error) {
-      console.error('Firebase onChildAdded コールバックエラー:', error);
       // エラーが発生してもアプリを停止させない
     }
   }, (error) => {
-    console.error('Firebase onChildAdded エラー:', error);
     showMessage('予定の追加に失敗しました。', 'error', 4000);
   });
   
@@ -479,7 +465,6 @@ async function loadEvents() {
       const wasInRange = isEventInAllowedRange(oldEvent, allowedRanges);
       const isInRange = isEventInAllowedRange(updatedEvent, allowedRanges);
       
-      console.log('Firebase: イベント更新', key);
       // 範囲外→範囲内、範囲内→範囲外、範囲内で日付変更の場合は更新
       if (wasInRange || isInRange) {
         updateViewsForEvent(updatedEvent);
@@ -490,11 +475,9 @@ async function loadEvents() {
       }
       }
     } catch (error) {
-      console.error('Firebase onChildChanged コールバックエラー:', error);
       // エラーが発生してもアプリを停止させない
     }
   }, (error) => {
-    console.error('Firebase onChildChanged エラー:', error);
     showMessage('予定の更新に失敗しました。', 'error', 4000);
   });
   
@@ -507,15 +490,12 @@ async function loadEvents() {
     if (existingIndex !== -1) {
       const removedEvent = events[existingIndex];
       events.splice(existingIndex, 1);
-      console.log('Firebase: イベント削除', key);
       updateViewsForEvent(removedEvent);
       }
     } catch (error) {
-      console.error('Firebase onChildRemoved コールバックエラー:', error);
       // エラーが発生してもアプリを停止させない
     }
   }, (error) => {
-    console.error('Firebase onChildRemoved エラー:', error);
     showMessage('予定の削除に失敗しました。', 'error', 4000);
   });
   
@@ -639,7 +619,6 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
   if (!silent) {
     showMessage('Googleカレンダーを更新しました。', 'success', 4000);
   }
-  console.log(
     '[Google Sync] 更新完了',
     `upserts=${filteredUpserts.length}`,
     `deletes=${filteredDeletes.length}`,
@@ -766,7 +745,6 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
   } else {
     // Always hide loading, even in silent mode
     hideLoading();
-    console.log(`Google Sync Result: ${message} | created=${created} updated=${updated} skipped=${skipped}`);
   }
   
   return { created, updated, skipped };
@@ -832,7 +810,6 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   } else {
     // Always hide loading, even in silent mode
     hideLoading();
-    console.log(
       `Google fetch: total=${googleEvents.length} created=${created} updated=${updated} deleted=${deleted}`
     );
   }
@@ -875,7 +852,6 @@ async function clearGoogleCalendarEvents({ silent = false } = {}) {
       6000
     );
   } else {
-    console.log(`Google clear: deleted=${result.deleted || 0}`);
   }
   return { deleted: Number(result.deleted) || 0 };
 }
@@ -936,7 +912,6 @@ async function deduplicateFirebaseEvents() {
     // Google由来が1つ以上ある場合、ローカルを削除
     if (googleEvents.length > 0) {
       const dateLabel = formatDateOnly(duplicates[0].startTime) || '';
-      console.log(
         `[Firebase重複チェック] "${duplicates[0].title || '(無題)'}" (${dateLabel}) -> ${duplicates.length}件 (Google:${googleEvents.length}, ローカル:${localEvents.length})`
       );
 
@@ -953,12 +928,10 @@ async function deduplicateFirebaseEvents() {
             const deletedOk = await deleteEvent(googleEvents[i].id, { syncGoogle: false });
             if (deletedOk) {
               deleted += 1;
-              console.log(
                 `[Firebase重複削除] Google由来の重複を削除: "${googleEvents[i].title || '(無題)'}" (${googleEvents[i].id})`
               );
             }
           } catch (error) {
-            console.error(`[Firebase重複削除] 削除に失敗:`, googleEvents[i].id, error);
           }
         }
       }
@@ -969,12 +942,10 @@ async function deduplicateFirebaseEvents() {
           const deletedOk = await deleteEvent(localEvent.id, { syncGoogle: false });
           if (deletedOk) {
             deleted += 1;
-            console.log(
               `[Firebase重複削除] ローカルイベントを削除: "${localEvent.title || '(無題)'}" (${localEvent.id}) - Google由来を優先`
             );
           }
         } catch (error) {
-          console.error(`[Firebase重複削除] 削除に失敗:`, localEvent.id, error);
         }
       }
     } else {
@@ -986,7 +957,6 @@ async function deduplicateFirebaseEvents() {
           return bTime - aTime; // 新しい順
         });
         const dateLabel = formatDateOnly(localEvents[0].startTime) || '';
-        console.log(
           `[Firebase重複チェック] ローカルのみ "${localEvents[0].title || '(無題)'}" (${dateLabel}) -> ${localEvents.length}件`
         );
         // 最新以外を削除
@@ -995,12 +965,10 @@ async function deduplicateFirebaseEvents() {
             const deletedOk = await deleteEvent(localEvents[i].id, { syncGoogle: false });
             if (deletedOk) {
               deleted += 1;
-              console.log(
                 `[Firebase重複削除] ローカル重複を削除: "${localEvents[i].title || '(無題)'}" (${localEvents[i].id})`
               );
             }
           } catch (error) {
-            console.error(`[Firebase重複削除] 削除に失敗:`, localEvents[i].id, error);
           }
         }
       }
@@ -1008,7 +976,6 @@ async function deduplicateFirebaseEvents() {
   }
 
   if (deleted > 0) {
-    console.log(`[Firebase重複削除] 完了: ${deleted}件の重複を削除しました`);
   }
   return { deleted };
 }
@@ -1020,7 +987,6 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
 
   // Ensure events is an array
   if (!Array.isArray(events)) {
-    console.warn('mergeGoogleEvents: events is not an array');
     return { created: 0, updated: 0, deleted: 0 };
   }
 
@@ -1096,7 +1062,6 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
       }
       const shouldDeleteAll = keeperIds.size === 0;
 
-      console.log(
         `[Google Sync] 重複チェック: "${normalized.title || '(無題)'}" (${dateLabel}) -> ${duplicates.length}件`
       );
 
@@ -1113,14 +1078,12 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
             if (deletedOk) {
               deleted += 1;
               eventsById.delete(duplicate.id);
-              console.log(
                 `[Google Sync] 重複削除: "${duplicate.title || '(無題)'}" (${duplicate.id}) - Google由来を優先`
               );
             } else {
               survivors.push(duplicate);
             }
           } catch (error) {
-            console.error(`[Google Sync] 重複イベントの削除に失敗:`, duplicate.id, error);
             survivors.push(duplicate);
           }
         }
@@ -1210,10 +1173,8 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
     const { deleted: firebaseDeleted } = await deduplicateFirebaseEvents();
     if (firebaseDeleted > 0) {
       deleted += firebaseDeleted;
-      console.log(`[Google Sync] Firebase重複削除: ${firebaseDeleted}件の重複を削除しました`);
     }
   } catch (error) {
-    console.error('[Google Sync] Firebase重複削除エラー:', error);
   }
 
   return { created, updated, deleted };
@@ -1278,7 +1239,6 @@ async function addEvent(event, options = {}) {
 
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、イベントを保存できません。設定を確認してください。';
-    console.error(message);
     showMessage(message, 'error', 6000);
     return null;
   }
@@ -1289,7 +1249,6 @@ async function addEvent(event, options = {}) {
     const { id: _omitId, ...payload } = newEvent;
     await window.firebase.set(newEventRef, payload);
     const newId = newEventRef.key;
-    console.log('Firebaseにイベントを追加:', newId);
 
     if (syncGoogle && newId && newEvent.isTimetable !== true) {
       try {
@@ -1305,7 +1264,6 @@ async function addEvent(event, options = {}) {
 
     return newId;
   } catch (error) {
-    console.error('Firebaseにイベントを追加できませんでした。', error);
     showMessage('イベントを保存できませんでした。ネットワークやFirebase設定を確認してください。', 'error', 6000);
     return null;
   }
@@ -1339,7 +1297,6 @@ async function updateEvent(id, event, options = {}) {
 
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、イベントを更新できません。設定を確認してください。';
-    console.error(message);
     showMessage(message, 'error', 6000);
     return false;
   }
@@ -1347,9 +1304,7 @@ async function updateEvent(id, event, options = {}) {
   const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
   try {
     await window.firebase.update(eventRef, updatedEvent);
-    console.log('Firebaseでイベントを更新:', id);
   } catch (error) {
-    console.error('Firebaseでイベントの更新に失敗しました。', error);
     showMessage('イベントの更新に失敗しました。ネットワーク状況を確認してください。', 'error', 6000);
     return false;
   }
@@ -1361,7 +1316,6 @@ async function updateEvent(id, event, options = {}) {
         silent: true,
       });
     } catch (error) {
-      console.error('Google同期エラー（更新）:', error);
       // Google同期が失敗してもFirebaseの更新は成功しているので、エラーをスローしない
       // ユーザーには通知しない（silent: trueの意図）
     }
@@ -1375,7 +1329,6 @@ async function deleteEvent(id, options = {}) {
   const { syncGoogle = true } = options;
   if (!isFirebaseEnabled || !window.firebase?.db) {
     const message = 'Firebaseが無効のため、イベントを削除できません。設定を確認してください。';
-    console.error(message);
     showMessage(message, 'error', 6000);
     return false;
   }
@@ -1385,9 +1338,7 @@ async function deleteEvent(id, options = {}) {
 
   try {
     await window.firebase.remove(eventRef);
-    console.log('Firebaseからイベントを削除:', id);
   } catch (error) {
-    console.error('Firebaseからイベントを削除できませんでした。', error);
     showMessage('イベントの削除に失敗しました。再度お試しください。', 'error', 6000);
     return false;
   }
@@ -1400,7 +1351,6 @@ async function deleteEvent(id, options = {}) {
         silent: true,
       });
     } catch (error) {
-      console.error('Google同期エラー（削除）:', error);
       // Google同期が失敗してもFirebaseの削除は成功しているので、エラーをスローしない
       // ユーザーには通知しない（silent: trueの意図）
     }
@@ -1438,7 +1388,6 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
         // 削除時にイベント情報（日付とタイトル）も送信して、IDが一致しない場合でもマッチングできるようにする
         await mirrorMutationsToGoogle({ deletes: deletableEvents, silent: true });
       } catch (error) {
-        console.error('Googleカレンダーからの一括削除に失敗しました。', error);
       }
     }
 
@@ -1448,7 +1397,6 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
     }
     return true;
   } catch (error) {
-    console.error('Firebaseイベント削除エラー:', error);
     if (!silent) {
       hideLoading();
       showMessage('予定の削除に失敗しました。再度お試しください。', 'error', 6000);
@@ -1466,7 +1414,6 @@ if (typeof window !== 'undefined') {
 
 function startAutomaticGoogleSync() {
   if (!GOOGLE_APPS_SCRIPT_ENDPOINT) {
-    console.warn('Google Apps Script エンドポイントが設定されていないため、自動同期をスキップします。');
     return;
   }
   if (googleSyncIntervalId) {
@@ -1479,18 +1426,14 @@ function startAutomaticGoogleSync() {
     if (googleSyncInFlight) return;
     googleSyncInFlight = true;
     try {
-      console.log(`[Google Sync] Auto sync start (${triggerSource}) at ${new Date().toISOString()}`);
       await fetchGoogleCalendarEvents({ silent: true });
       await syncEventsToGoogleCalendar({ silent: true });
-      console.log(`[Google Sync] Auto sync done (${triggerSource}) at ${new Date().toISOString()}`);
     } catch (error) {
-      console.error('自動Googleカレンダー同期に失敗しました。', error);
     } finally {
       googleSyncInFlight = false;
     }
   };
 
-  console.log(`[Google Sync] Initial auto sync scheduled in ${INITIAL_GOOGLE_SYNC_DELAY_MS / 1000}s`);
   googleSyncTimeoutId = setTimeout(async () => {
     googleSyncTimeoutId = null;
     await syncTask('initial-delay');
@@ -1631,7 +1574,6 @@ function renderDayView() {
   const container = safeGetElementById('dayEventContainer');
   const allDayContainer = safeGetElementById('dayAllDayContainer');
   if (!container) {
-    console.warn('Day event container not found');
     return;
   }
   if (allDayContainer) {
@@ -1705,7 +1647,6 @@ function renderWeekView() {
     
     // イベント表示
     if (!eventsContainer) {
-      console.warn(`Week day container not found for day ${i}`);
       continue;
     }
     
@@ -2077,7 +2018,6 @@ function showEventModal(eventId = null) {
   
   // 必須要素のチェック
   if (!modal || !modalTitle || !form || !startInput || !endInput) {
-    console.error('Event modal required elements not found');
     return;
   }
   
@@ -2311,7 +2251,6 @@ function updateDateDisplay() {
 function renderMonthView() {
   const monthGrid = safeGetElementById('monthGrid');
   if (!monthGrid) {
-    console.warn('Month grid not found');
     return;
   }
   monthGrid.innerHTML = '';
@@ -2345,7 +2284,6 @@ function createMonthDayElement(date, currentMonth) {
   div.className = 'month-day';
   // Validate date before calling toISOString()
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    console.warn('Invalid date passed to createMonthDayElement');
     return div;
   }
   div.dataset.date = date.toISOString().split('T')[0];
@@ -2628,7 +2566,6 @@ function getAllowedDateRanges() {
 
 function logAllowedRanges(label) {
   const { rangeStart, rangeEnd } = getAllowedDateRanges();
-  console.log(
     `${label} target range:`,
     `${formatDateOnly(rangeStart)}〜${formatDateOnly(rangeEnd)}`
   );
@@ -2706,7 +2643,6 @@ function scheduleAllNotifications() {
       scheduledTimeouts.push(timeout);
     });
   }).catch((error) => {
-    console.error('通知のスケジュールに失敗しました:', error);
   });
 }
 
@@ -2727,7 +2663,6 @@ function exportEventsAsJSON(range = 'all') {
     URL.revokeObjectURL(url);
     showMessage('イベントをエクスポートしました', 'success', 3000);
   } catch (error) {
-    console.error('エクスポートエラー:', error);
     showMessage('エクスポートに失敗しました。', 'error', 6000);
   }
 }
@@ -3300,7 +3235,6 @@ function validateEvent(event) {
 
 // 初期化（combiと同じロジック）
 document.addEventListener('DOMContentLoaded', function() {
-  console.log('アプリケーションを初期化中...');
   
   // Quill editor を初期化（拡張されたビジュアルエディタ）
   const descContainer = document.getElementById('eventDescription');
@@ -3355,9 +3289,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     });
     
-    console.log('Enhanced Quill visual editor initialized');
   } else if (descContainer) {
-    console.warn('Quill library not loaded');
   }
   
   // Firebase接続チェック
@@ -3377,7 +3309,6 @@ document.addEventListener('DOMContentLoaded', function() {
   // 週次グリッドでのクリック追加を有効化
   enableWeekGridClickToCreate();
   
-  console.log('アプリケーション初期化完了');
   startAutomaticGoogleSync();
 });
 
@@ -3412,7 +3343,6 @@ function setupEventListeners() {
       }
       updateViews();
       } catch (error) {
-        console.error('Error in prevDay handler:', error);
         showMessage('日付の移動に失敗しました。', 'error', 3000);
       }
     };
@@ -3432,7 +3362,6 @@ function setupEventListeners() {
       }
       updateViews();
       } catch (error) {
-        console.error('Error in nextDay handler:', error);
         showMessage('日付の移動に失敗しました。', 'error', 3000);
       }
     };
@@ -3449,7 +3378,6 @@ function setupEventListeners() {
       currentDate = new Date();
       updateViews();
       } catch (error) {
-        console.error('Error in todayBtn handler:', error);
         showMessage('今日の日付への移動に失敗しました。', 'error', 3000);
       }
     };
@@ -3465,7 +3393,6 @@ function setupEventListeners() {
       switchView('day');
       updateViews();
       } catch (error) {
-        console.error('Error in dayViewBtn handler:', error);
         showMessage('ビューの切り替えに失敗しました。', 'error', 3000);
       }
     };
@@ -3480,7 +3407,6 @@ function setupEventListeners() {
       switchView('week');
       updateViews();
       } catch (error) {
-        console.error('Error in weekViewBtn handler:', error);
         showMessage('ビューの切り替えに失敗しました。', 'error', 3000);
       }
     };
@@ -3495,7 +3421,6 @@ function setupEventListeners() {
       switchView('month');
       updateViews();
       } catch (error) {
-        console.error('Error in monthViewBtn handler:', error);
         showMessage('ビューの切り替えに失敗しました。', 'error', 3000);
       }
     };
@@ -3525,7 +3450,6 @@ function setupEventListeners() {
         }
       }
       } catch (error) {
-        console.error('Error in allDayCheckbox handler:', error);
         showMessage('終日イベントの設定に失敗しました。', 'error', 3000);
       }
     };
@@ -3538,7 +3462,6 @@ function setupEventListeners() {
       try {
       openAllDayCreateModal(new Date(currentDate));
       } catch (error) {
-        console.error('Error in dayAllDayContainer handler:', error);
         showMessage('終日イベントの作成に失敗しました。', 'error', 3000);
       }
     };
@@ -3554,7 +3477,6 @@ function setupEventListeners() {
       targetDate.setDate(weekStart.getDate() + dayIndex);
       openAllDayCreateModal(targetDate);
       } catch (error) {
-        console.error('Error in week all-day column handler:', error);
         showMessage('終日イベントの作成に失敗しました。', 'error', 3000);
       }
     };
@@ -3572,7 +3494,6 @@ function setupEventListeners() {
     switchView('day');
     updateViews();
     } catch (error) {
-      console.error('Error in handleWeekHeaderSelect:', error);
       showMessage('日付の選択に失敗しました。', 'error', 3000);
     }
   };
@@ -3586,7 +3507,6 @@ function setupEventListeners() {
         handleWeekHeaderSelect(dayIndex);
       }
       } catch (error) {
-        console.error('Error in week header keypress handler:', error);
       }
     };
     eventListeners.add(cell, 'click', clickHandler);
@@ -3601,7 +3521,6 @@ function setupEventListeners() {
         allDayEndInput.value = allDayStartInput.value;
       }
       } catch (error) {
-        console.error('Error in allDayStartInput handler:', error);
       }
     };
     eventListeners.add(allDayStartInput, 'change', handler);
@@ -3622,7 +3541,6 @@ function setupEventListeners() {
         closeEventModal();
       }
       } catch (error) {
-        console.error('Error in eventModal click handler:', error);
       }
     };
     eventListeners.add(eventModal, 'click', handler);
@@ -3638,7 +3556,6 @@ function setupEventListeners() {
       }
     }
     } catch (error) {
-      console.error('Error in ESC key handler:', error);
     }
   };
   eventListeners.add(document, 'keydown', escHandler);
@@ -3646,7 +3563,6 @@ function setupEventListeners() {
   // フォーム送信
   const eventForm = safeGetElementById('eventForm');
   if (!eventForm) {
-    console.error('Event form not found');
     return;
   }
   
@@ -3786,7 +3702,6 @@ function setupEventListeners() {
       showMessage(editingEventId ? '予定を更新しました' : '予定を追加しました', 'success', 3000);
     } catch (error) {
       hideLoading();
-      console.error('イベント保存エラー:', error);
       showMessage('イベントの保存に失敗しました。再度お試しください。', 'error', 6000);
     } finally {
       // Reset submission flag
@@ -3811,7 +3726,6 @@ function setupEventListeners() {
           showMessage('予定を削除しました', 'success', 3000);
         } catch (error) {
           hideLoading();
-          console.error('イベント削除エラー:', error);
           showMessage('イベントの削除に失敗しました。', 'error', 6000);
         }
       }
@@ -3832,7 +3746,6 @@ function setupEventListeners() {
         recurrenceEndGroup.classList.add('hidden');
       }
       } catch (error) {
-        console.error('Error in recurrenceSelect handler:', error);
       }
     };
     eventListeners.add(recurrenceSelect, 'change', handler);
@@ -4101,7 +4014,6 @@ function attachResizeHandlers() {
       const endDate = new Date(ev.endTime);
       if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return;
       
-      console.log('イベント移動開始:', ev.title, 'isMobile:', isMobile);
       
       startY = e.clientY;
       originalStart = startDate;
@@ -4123,7 +4035,6 @@ function attachResizeHandlers() {
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev || ev.isTimetable === true) return;
       
-      console.log('タッチ移動開始:', ev.title);
       
       if (!e.touches || e.touches.length === 0) return;
       if (!ev.startTime || !ev.endTime) return;
@@ -4219,7 +4130,6 @@ function attachResizeHandlers() {
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
-      console.log('イベント移動終了:', ev.title, 'resizing:', currentResizing, 'minutesDelta:', minutesDelta);
 
       // クリック（移動なし）は詳細モーダルを開く
       if (currentResizing === 'move' && minutesDelta === 0) {
@@ -4277,7 +4187,6 @@ function attachResizeHandlers() {
         hideLoading();
       } catch (error) {
         hideLoading();
-        console.error('イベント移動の同期に失敗しました', error);
         showMessage('予定の更新に失敗しました。', 'error', 6000);
       }
     }
@@ -4306,7 +4215,6 @@ function attachResizeHandlers() {
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
       if (!ev) return;
 
-      console.log('タッチ移動終了:', ev.title, 'resizing:', currentResizing, 'minutesDelta:', minutesDelta);
 
       // クリック（移動なし）は詳細モーダルを開く
       if (currentResizing === 'move' && minutesDelta === 0) {
@@ -4349,7 +4257,6 @@ function attachResizeHandlers() {
         hideLoading();
       } catch (error) {
         hideLoading();
-        console.error('イベント移動の同期に失敗しました', error);
         showMessage('予定の更新に失敗しました。', 'error', 6000);
       }
     }

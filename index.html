@@ -28,14 +28,14 @@
         } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js";
 
         const firebaseConfig = {
-            apiKey: "AIzaSyDCKnSSbdU-17Wzpjsi6gLPnXTCYZDbKPQ",
-            authDomain: "schedule-mgr-b16fb.firebaseapp.com",
-            databaseURL: "https://schedule-mgr-b16fb-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "schedule-mgr-b16fb",
-            storageBucket: "schedule-mgr-b16fb.firebasestorage.app",
-            messagingSenderId: "811941523003",
-            appId: "1:811941523003:web:a25889182329fe03df761e",
-            measurementId: "G-V1P050F1CJ"
+            apiKey: "AIzaSyDhYTiWflm90SZTySJMDlBpGu7WHzkUaL4",
+            authDomain: "manager-8ac68.firebaseapp.com",
+            databaseURL: "https://manager-8ac68-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "manager-8ac68",
+            storageBucket: "manager-8ac68.firebasestorage.app",
+            messagingSenderId: "978586727124",
+            appId: "1:978586727124:web:34e5fe89cc51f35b37c141",
+            measurementId: "G-XPC0DXSBNZ"
         };
 
         const app = initializeApp(firebaseConfig);
@@ -43,7 +43,6 @@
         const db = getDatabase(app);
 
         window.firebase = { app, analytics, db, ref, set, onValue, onChildAdded, onChildChanged, onChildRemoved, push, update, remove, get };
-        console.log('Firebase v11 initialized successfully');
     </script>
 
     <div class="app">
