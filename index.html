@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, height=device-height">
     <title>スケジュール管理アプリ</title>
 
     <!-- iOS App Configuration -->
@@ -73,7 +73,7 @@
             function preventZoom() {
                 const viewport = document.querySelector('meta[name=viewport]');
                 if (viewport) {
-                    viewport.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
+                    viewport.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, height=device-height';
                 }
             }
 
@@ -83,6 +83,15 @@
             // Re-apply on orientation change
             window.addEventListener('orientationchange', function() {
                 setTimeout(preventZoom, 500);
+            });
+
+            // Handle viewport resize for mobile Safari
+            window.addEventListener('resize', function() {
+                // Debounce resize events
+                clearTimeout(window.resizeTimeout);
+                window.resizeTimeout = setTimeout(function() {
+                    preventZoom();
+                }, 100);
             });
 
             // Prevent zoom on focus for iOS
@@ -155,10 +164,6 @@
         <main class="main-content">
             <!-- 日次ビュー -->
             <div id="dayView" class="view-container active">
-                <div class="day-header">
-                    <div class="time-column">時間</div>
-                    <div class="events-column">予定</div>
-                </div>
                 <div class="day-all-day-row">
                     <div class="all-day-label" data-view="day">終日</div>
                     <div id="dayAllDayContainer" class="all-day-events">

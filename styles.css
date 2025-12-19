@@ -73,11 +73,16 @@ body {
 
 /* アプリ全体 */
 .app {
-  height: 100vh;
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 100dvh;
+  height: 100vh; /* Fallback for browsers that don't support dvh */
+  min-height: 100vh; /* Fallback for browsers that don't support dvh */
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Safe area padding for iOS Safari */
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-top: env(safe-area-inset-top);
 }
 
 /* ヘッダー */
@@ -243,16 +248,6 @@ body {
 }
 
 /* 日次ビュー */
-.day-header {
-  display: grid;
-  grid-template-columns: clamp(4rem, 10vw, 5rem) 1fr;
-  gap: clamp(0.5rem, 1.5vw, 0.625rem);
-  margin-bottom: clamp(0.5rem, 1.5vw, 0.625rem);
-  font-weight: 600;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-}
-
 .day-all-day-row {
   display: grid;
   grid-template-columns: clamp(4rem, 10vw, 5rem) 1fr;
@@ -1441,7 +1436,6 @@ body.modal-open {
     padding: 15px;
   }
   
-  .day-header,
   .day-all-day-row,
   .day-events {
     grid-template-columns: 55px minmax(0, 1fr);
@@ -1745,6 +1739,17 @@ body.modal-open {
   textarea:focus,
   select:focus {
     -webkit-appearance: none;
+  }
+
+  /* Fix for iOS Safari bottom content cutoff */
+  .app {
+    padding-bottom: max(15px, env(safe-area-inset-bottom));
+  }
+
+  /* Ensure main content doesn't get cut off */
+  .main-content {
+    padding-bottom: max(15px, env(safe-area-inset-bottom));
+  }
     -webkit-text-size-adjust: 100%;
     -webkit-user-select: text;
     outline: none;
