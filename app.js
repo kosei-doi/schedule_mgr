@@ -338,9 +338,10 @@ function updateViewsForEvent(event) {
 // イベントを正規化
 function normalizeEventFromSnapshot(snapshot, key) {
   const payload = snapshot.val() || {};
+  console.log(`[normalizeEventFromSnapshot] 受信データ: ${key}`, payload);
   const normalizedStart = normalizeEventDateTimeString(payload.startTime) || payload.startTime || '';
   const normalizedEnd = normalizeEventDateTimeString(payload.endTime) || payload.endTime || '';
-  return {
+  const normalizedEvent = {
     ...payload,
     id: key,
     startTime: normalizedStart,
@@ -352,6 +353,8 @@ function normalizeEventFromSnapshot(snapshot, key) {
     isGoogleImported: payload.isGoogleImported === true,
     externalUpdatedAt: payload.externalUpdatedAt || null,
   };
+  console.log(`[normalizeEventFromSnapshot] 正規化後: ${key}`, normalizedEvent);
+  return normalizedEvent;
 }
 
 // イベントを読み込む関数（差分更新版）
@@ -437,6 +440,8 @@ async function loadEvents() {
     // 既存のイベントをチェック（重複防止）
     const existingIndex = events.findIndex(e => e.id === key);
     if (existingIndex === -1) {
+      // イベント追加中の場合でも、loadEvents時などの初期読み込み時は追加する必要がある
+      console.log(`[リアルタイム] 新規イベント追加: ${key} - ${newEvent.title} (source: ${newEvent.source})`);
       events.push(newEvent);
       events.sort((a, b) => {
         const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
@@ -447,12 +452,15 @@ async function loadEvents() {
       });
       updateViewsForEvent(newEvent);
     } else {
-      // 既存イベントを更新（念のため）
+      // 既存イベントがある場合、リアルタイムデータで更新（より新しい情報）
+      const existingEvent = events[existingIndex];
+      console.log(`[リアルタイム] 既存イベント更新: ${key} - ${newEvent.title} (source: ${newEvent.source})`);
       events[existingIndex] = newEvent;
       updateViewsForEvent(newEvent);
     }
     } catch (error) {
       // エラーが発生してもアプリを停止させない
+      console.error('[リアルタイム] エラー:', error);
     }
   }, (error) => {
     showMessage('予定の追加に失敗しました。', 'error', 4000);
@@ -1235,6 +1243,16 @@ function normalizeGoogleEvent(googleEvent = {}, ranges) {
     googleEventId: googleEvent.googleEventId || null,
     externalUpdatedAt: googleEvent.lastUpdated || null,
   };
+
+  // Google Calendar APIの終日イベントの場合、end.dateは終了日の翌日を指すので1日前に調整
+  if (candidate.allDay && candidate.endTime) {
+    const endDate = new Date(candidate.endTime.split('T')[0]);
+    if (!Number.isNaN(endDate.getTime())) {
+      endDate.setDate(endDate.getDate() - 1);
+      candidate.endTime = endDate.toISOString().split('T')[0];
+    }
+  }
+
   if (!isEventInAllowedRange(candidate, ranges)) {
     return { ...candidate, filteredOut: true };
   }
@@ -1256,6 +1274,9 @@ function normalizeForCompare(value, key) {
 }
 
 // イベントを追加（combiと同じロジック）
+// イベント追加中のフラグ（リアルタイムリスナーの重複防止用）
+let isAddingEvent = false;
+
 async function addEvent(event, options = {}) {
   const { syncGoogle = true } = options;
 
@@ -1288,33 +1309,61 @@ async function addEvent(event, options = {}) {
     return null;
   }
 
+  // イベント追加中フラグをセット
+  isAddingEvent = true;
+  console.log(`[addEvent] 開始: ${event.title}, フラグセット`);
+
   try {
     const eventsRef = window.firebase.ref(window.firebase.db, "events");
     const newEventRef = window.firebase.push(eventsRef);
-    const { id: _omitId, ...payload } = newEvent;
-    await window.firebase.set(newEventRef, payload);
     const newId = newEventRef.key;
+    console.log(`[addEvent] Firebase push完了: ${newId}`);
 
     if (!newId) {
-      await window.firebase.remove(newEventRef).catch(() => {});
+      isAddingEvent = false;
       throw new Error('Firebase push failed: no key returned');
     }
 
+    // トランザクション的な同期処理：Google同期が成功した場合のみFirebaseに保存
     if (syncGoogle && newEvent.isTimetable !== true) {
       try {
-        // Google同期時は常にローディング画面を表示
+        // Google同期を先に実行
         await mirrorMutationsToGoogle({
           upserts: [{ ...newEvent, id: newId }],
           silent: false,
         });
+
+        // 同期成功時のみFirebaseに保存
+        const { id: _omitId, ...payload } = newEvent;
+        await window.firebase.set(newEventRef, payload);
+
       } catch (error) {
-        await window.firebase.remove(newEventRef).catch(() => {});
-        throw error;
+        isAddingEvent = false;
+        // 同期失敗時はFirebaseに保存せず、具体的なエラーメッセージを表示
+        const errorMessage = error.message?.includes('Google') ?
+          'Google Calendarとの同期に失敗しました。ネットワーク接続を確認してください。' :
+          'イベントの同期に失敗しました。再度お試しください。';
+        showMessage(errorMessage, 'error', 6000);
+        throw new Error('Google sync failed: event not saved');
       }
+    } else {
+      // Google同期なしの場合は直接Firebaseに保存
+      const { id: _omitId, ...payload } = newEvent;
+      await window.firebase.set(newEventRef, payload);
     }
+
+    // Firebase保存成功後、events配列の操作はリアルタイムリスナーに任せる
+    console.log(`[addEvent] Firebase保存完了、リアルタイムリスナーを待機: ${newId}`);
+
+    // フラグをリセット（リアルタイムリスナーが処理）
+    setTimeout(() => {
+      console.log(`[addEvent] フラグリセット: ${newId}`);
+      isAddingEvent = false;
+    }, 500);
 
     return newId;
   } catch (error) {
+    isAddingEvent = false;
     showMessage('イベントを保存できませんでした。ネットワークやFirebase設定を確認してください。', 'error', 6000);
     return null;
   }
@@ -1693,10 +1742,9 @@ function renderWeekView() {
     const allDayColumn = document.querySelector(`#weekView .week-all-day-columns .all-day-column[data-day="${i}"]`);
     const headerCell = document.querySelector(`#weekView .week-header .day-header-cell[data-day="${i}"]`);
     
-    // 日付表示（曜日なし）
-    const dayNumber = dayDate.getDate();
+    // 日付表示（曜日付き）
     if (dateHeaderElement) {
-      dateHeaderElement.textContent = dayNumber;
+      dateHeaderElement.textContent = formatDate(dayDate, 'D (ddd)');
     }
     if (headerCell) {
       headerCell.setAttribute('role', 'button');
@@ -3476,6 +3524,116 @@ document.addEventListener('DOMContentLoaded', async function() {
   hideLoading();
 });
 
+// ===== デバッグ用関数 =====
+// ブラウザコンソールから以下の関数を呼び出してeventsの中身を確認できます
+
+/**
+ * events配列の全内容をコンソールに出力
+ */
+window.debugEvents = function() {
+  console.log('=== 全イベント一覧 ===');
+  console.log('総イベント数:', events.length);
+  console.table(events.map(ev => ({
+    id: ev.id,
+    title: ev.title,
+    startTime: ev.startTime,
+    endTime: ev.endTime,
+    allDay: ev.allDay,
+    source: ev.source,
+    isGoogleImported: ev.isGoogleImported,
+    isTimetable: ev.isTimetable
+  })));
+  console.log('詳細データ:', events);
+};
+
+/**
+ * イベント数を表示
+ */
+window.debugEventCount = function() {
+  console.log(`現在のイベント数: ${events.length}`);
+  const sources = events.reduce((acc, ev) => {
+    acc[ev.source || 'unknown'] = (acc[ev.source || 'unknown'] || 0) + 1;
+    return acc;
+  }, {});
+  console.log('ソース別内訳:', sources);
+};
+
+/**
+ * 指定IDのイベントを詳細表示
+ */
+window.debugEventById = function(id) {
+  const event = events.find(ev => ev.id === id);
+  if (event) {
+    console.log('=== 指定IDのイベント ===');
+    console.log('ID:', event.id);
+    console.log('タイトル:', event.title);
+    console.log('開始時間:', event.startTime);
+    console.log('終了時間:', event.endTime);
+    console.log('終日:', event.allDay);
+    console.log('ソース:', event.source);
+    console.log('Googleインポート:', event.isGoogleImported);
+    console.log('タイムテーブル:', event.isTimetable);
+    console.log('GoogleイベントID:', event.googleEventId);
+    console.log('作成日時:', event.createdAt);
+    console.log('更新日時:', event.updatedAt);
+    console.log('詳細データ:', event);
+  } else {
+    console.log('指定IDのイベントが見つかりません:', id);
+  }
+};
+
+/**
+ * 指定日付のイベントを表示
+ */
+window.debugEventsByDate = function(dateStr) {
+  const targetDate = new Date(dateStr);
+  const targetDateStr = targetDate.toISOString().split('T')[0];
+
+  const dayEvents = events.filter(ev => {
+    if (!ev.startTime) return false;
+    const eventDate = new Date(ev.startTime).toISOString().split('T')[0];
+    return eventDate === targetDateStr;
+  });
+
+  console.log(`=== ${targetDateStr} のイベント ===`);
+  console.log('イベント数:', dayEvents.length);
+  if (dayEvents.length > 0) {
+    console.table(dayEvents.map(ev => ({
+      id: ev.id,
+      title: ev.title,
+      startTime: ev.startTime,
+      endTime: ev.endTime,
+      allDay: ev.allDay,
+      source: ev.source
+    })));
+  }
+};
+
+/**
+ * 最新のイベントを表示
+ */
+window.debugLatestEvents = function(count = 5) {
+  const sortedEvents = [...events].sort((a, b) =>
+    new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+  );
+
+  console.log(`=== 最新${count}件のイベント ===`);
+  console.table(sortedEvents.slice(0, count).map(ev => ({
+    id: ev.id,
+    title: ev.title,
+    createdAt: ev.createdAt,
+    updatedAt: ev.updatedAt,
+    source: ev.source
+  })));
+};
+
+console.log('デバッグ関数が利用可能です:');
+console.log('- debugEvents(): 全イベント表示');
+console.log('- debugEventCount(): イベント数表示');
+console.log('- debugEventById(id): 指定IDのイベント表示');
+console.log('- debugEventsByDate("2024-01-01"): 指定日付のイベント表示');
+console.log('- debugLatestEvents(5): 最新イベント表示');
+
 window.addEventListener('beforeunload', () => {
   // Firebaseリスナーのクリーンアップ
   if (typeof unsubscribeEvents === 'function') {
@@ -3821,12 +3979,10 @@ function setupEventListeners() {
           createdAt: new Date().toISOString()
         };
         
-        // Firebaseに保存（成功後にローカル配列を更新）
+        // Firebaseに保存（addEvent関数内でローカル配列も更新される）
         const newId = await addEvent(newEvent);
-        if (newId) {
-          // イベント作成が成功したらローカル配列に追加（リアルタイムリスナーで重複防止）
-          newEvent.id = newId;
-          events.push(newEvent);
+        if (!newId) {
+          console.error('イベント作成に失敗しました');
         }
       } else if (editingEventId) {
         // 既存イベントを更新
@@ -3880,12 +4036,10 @@ function setupEventListeners() {
           }
         }
       } else {
-        // 新規イベントを作成
+        // 新規イベントを作成（addEvent関数内でローカル配列も更新される）
         const newId = await addEvent(event);
-        if (newId) {
-          // イベント作成が成功したらローカル配列に追加（リアルタイムリスナーで重複防止）
-          const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
-          events.push(newEvent);
+        if (!newId) {
+          console.error('イベント作成に失敗しました');
         }
       }
       
