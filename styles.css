@@ -399,9 +399,6 @@ body {
   box-sizing: border-box;
 }
 
-.all-day-events .event-item.all-day {
-  /* inline-flex で内容幅に追従 */
-}
 
 .event-item.all-day .resize-handle,
 .event-item.all-day .event-time {
@@ -1739,6 +1736,7 @@ body.modal-open {
   textarea:focus,
   select:focus {
     -webkit-appearance: none;
+    appearance: none;
   }
 
   /* Fix for iOS Safari bottom content cutoff */
@@ -1750,11 +1748,6 @@ body.modal-open {
   .main-content {
     padding-bottom: max(15px, env(safe-area-inset-bottom));
   }
-    -webkit-text-size-adjust: 100%;
-    -webkit-user-select: text;
-    outline: none;
-    font-size: 16px !important;
-  }
 
   /* Prevent double-tap zoom */
   * {
@@ -1765,6 +1758,7 @@ body.modal-open {
   body {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
+    user-select: none;
     -webkit-text-size-adjust: 100%;
     -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
   }
@@ -1803,6 +1797,7 @@ body {
   textarea,
   select {
     -webkit-appearance: none;
+    appearance: none;
     -webkit-text-size-adjust: 100%;
     font-size: 16px !important;
   }
