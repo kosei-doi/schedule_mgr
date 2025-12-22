@@ -2,6 +2,12 @@ let unsubscribeEvents = null;
 let unsubscribeChildAdded = null;
 let unsubscribeChildChanged = null;
 let unsubscribeChildRemoved = null;
+let unsubscribeShiftsChildAdded = null;
+let unsubscribeShiftsChildChanged = null;
+let unsubscribeShiftsChildRemoved = null;
+let unsubscribeWorkplacesChildAdded = null;
+let unsubscribeWorkplacesChildChanged = null;
+let unsubscribeWorkplacesChildRemoved = null;
 
 // イベントリスナーのクリーンアップ用
 const eventListeners = {
@@ -43,7 +49,50 @@ let currentView = 'day'; // 'day', 'week', or 'month'
 let editingEventId = null;
 let isFirebaseEnabled = false;
 let quillEditor = null; // Quill editor instance
+let mealEvents = []; // 食事イベントを格納
+let dietDatabase = null; // diet_mgrのFirebaseデータベース参照
+let workplaces = []; // ptプロジェクトの職場データ
 const clientId = (() => Date.now().toString(36) + Math.random().toString(36).slice(2))();
+
+// 職場変更時に該当するシフトの色を更新
+function updateShiftsColorForWorkplace(workplaceId) {
+  const workplace = workplaces.find(w => w.id === workplaceId);
+  if (!workplace) return;
+
+  let updatedCount = 0;
+  events.forEach(event => {
+    if (event.source === 'shift' && event.workplaceId === workplaceId) {
+      const oldColor = event.color;
+      event.color = workplace.color || '#3b82f6';
+      if (oldColor !== event.color) {
+        updatedCount++;
+      }
+    }
+  });
+
+  if (updatedCount > 0) {
+    updateViews(); // ビューを更新して色変更を反映
+  }
+}
+
+// 職場削除時に該当するシフトの色をデフォルトにリセット
+function resetShiftsColorForWorkplace(workplaceId) {
+  let updatedCount = 0;
+  events.forEach(event => {
+    if (event.source === 'shift' && event.workplaceId === workplaceId) {
+      const oldColor = event.color;
+      event.color = '#3b82f6'; // デフォルトの青色
+      if (oldColor !== event.color) {
+        updatedCount++;
+      }
+    }
+  });
+
+  if (updatedCount > 0) {
+    updateViews(); // ビューを更新して色変更を反映
+  }
+}
+
 let messageTimeoutId = null;
 let googleSyncIntervalId = null;
 let googleSyncTimeoutId = null;
@@ -355,6 +404,209 @@ function normalizeEventFromSnapshot(snapshot, key) {
   return normalizedEvent;
 }
 
+// 食事データを読み込む関数
+async function loadMealData() {
+  try {
+    // diet_mgrのFirebase初期化（まだ初期化されていない場合）
+    if (!dietDatabase) {
+      // diet_mgrと同じFirebase設定で初期化
+      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js");
+      const { getDatabase } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js");
+
+      const dietFirebaseConfig = {
+        apiKey: "AIzaSyDhYTiWflm90SZTySJMDlBpGu7WHzkUaL4",
+        authDomain: "manager-8ac68.firebaseapp.com",
+        databaseURL: "https://manager-8ac68-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "manager-8ac68",
+        storageBucket: "manager-8ac68.firebasestorage.app",
+        messagingSenderId: "978586727124",
+        appId: "1:978586727124:web:34e5fe89cc51f35b37c141",
+        measurementId: "G-XPC0DXSBNZ"
+      };
+
+      const dietApp = initializeApp(dietFirebaseConfig, 'diet-app');
+      dietDatabase = getDatabase(dietApp);
+    }
+
+    console.log('Loading meal data...');
+
+    // inventoryデータを取得（食事名を取得するため）
+    const inventoryRef = window.firebase.ref(dietDatabase, 'inventory');
+    const inventorySnapshot = await window.firebase.get(inventoryRef);
+    const inventoryData = inventorySnapshot.exists() ? inventorySnapshot.val() : {};
+
+    console.log('Inventory data loaded:', Object.keys(inventoryData).length, 'items');
+
+    // weeklyPlanデータを取得（mealsの代わりにweeklyPlanを使用）
+    const weeklyPlanRef = window.firebase.ref(dietDatabase, 'weeklyPlan');
+    const weeklyPlanSnapshot = await window.firebase.get(weeklyPlanRef);
+
+    if (weeklyPlanSnapshot.exists()) {
+      const weeklyPlanData = weeklyPlanSnapshot.val();
+      console.log('WeeklyPlan data loaded:', Object.keys(weeklyPlanData).length, 'entries');
+      mealEvents = convertWeeklyPlanToEvents(weeklyPlanData, inventoryData);
+      console.log('食事データを読み込みました:', mealEvents.length, '件');
+    } else {
+      mealEvents = [];
+      console.log('週次献立データが存在しません');
+    }
+  } catch (error) {
+    console.error('食事データの読み込みに失敗しました:', error);
+    mealEvents = [];
+  }
+}
+
+// weeklyPlanデータをイベント形式に変換
+function convertWeeklyPlanToEvents(weeklyPlanData, inventoryData) {
+  const events = [];
+  const mealTimes = {
+    0: '08:00', // 朝食: 8時
+    1: '12:00', // 昼食: 12時
+    2: '18:00'  // 夕食: 18時
+  };
+  const mealNames = {
+    0: '朝食',
+    1: '昼食',
+    2: '夕食'
+  };
+  const mealColors = {
+    0: '#f59e0b', // 全ての食事で同じオレンジ色を使用
+    1: '#f59e0b', // 全ての食事で同じオレンジ色を使用
+    2: '#f59e0b'  // 全ての食事で同じオレンジ色を使用
+  };
+
+  Object.entries(weeklyPlanData).forEach(([key, itemId]) => {
+    console.log(`Processing weeklyPlan entry: ${key} = ${itemId}`);
+    // weeklyPlanのキーは "YYYY-MM-DD-0", "YYYY-MM-DD-1", "YYYY-MM-DD-2" の形式
+    const parts = key.split('-');
+    console.log(`Key parts:`, parts);
+    if (parts.length === 4) {
+      const dateStr = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+      const mealIndex = parseInt(parts[3]);
+      console.log(`Parsed: dateStr=${dateStr}, mealIndex=${mealIndex}, mealTime=${mealTimes[mealIndex]}`);
+
+      if (itemId && mealIndex >= 0 && mealIndex <= 2) {
+        // inventoryデータから実際の食事名を取得
+        let mealTitle = `${mealNames[mealIndex]}: ${itemId}`; // デフォルトはID
+
+        if (inventoryData[itemId] && inventoryData[itemId].name) {
+          mealTitle = inventoryData[itemId].name;
+        } else {
+          // inventoryに存在しない場合は「不明な食事」として表示
+          mealTitle = '不明な食事';
+        }
+
+        const startDateTime = `${dateStr}T${mealTimes[mealIndex]}:00`;
+        console.log(`Creating event: startTime=${startDateTime}`);
+        // 1時間の食事イベントとして設定
+        const startDate = new Date(startDateTime);
+        const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // 1時間後
+
+        // ローカル時間をYYYY-MM-DDTHH:mm形式で取得
+        const endYear = endDate.getFullYear();
+        const endMonth = String(endDate.getMonth() + 1).padStart(2, '0');
+        const endDay = String(endDate.getDate()).padStart(2, '0');
+        const endHours = String(endDate.getHours()).padStart(2, '0');
+        const endMinutes = String(endDate.getMinutes()).padStart(2, '0');
+        const endDateTime = `${endYear}-${endMonth}-${endDay}T${endHours}:${endMinutes}`;
+
+        console.log(`Event times: start=${startDateTime}, end=${endDateTime}`);
+
+        events.push({
+          id: `meal-${dateStr}-${mealIndex}`,
+          title: mealTitle,
+          startTime: startDateTime,
+          endTime: endDateTime,
+          allDay: false,
+          color: mealColors[mealIndex],
+          source: 'diet',
+          isTimetable: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastWriteClientId: 'diet-integration'
+        });
+      }
+    }
+  });
+
+  return events;
+}
+
+// 食事データをイベント形式に変換（旧関数、念のため残しておく）
+function convertMealsToEvents(mealsData, inventoryData) {
+  const events = [];
+  const mealTimes = {
+    breakfast: '08:00', // 朝食: 8時
+    lunch: '12:00',     // 昼食: 12時
+    dinner: '18:00'     // 夕食: 18時
+  };
+  const mealNames = {
+    breakfast: '朝食',
+    lunch: '昼食',
+    dinner: '夕食'
+  };
+  const mealColors = {
+    breakfast: '#f59e0b', // 全ての食事で同じオレンジ色を使用
+    lunch: '#f59e0b',     // 全ての食事で同じオレンジ色を使用
+    dinner: '#f59e0b'     // 全ての食事で同じオレンジ色を使用
+  };
+
+  Object.entries(mealsData).forEach(([dateStr, mealData]) => {
+    ['breakfast', 'lunch', 'dinner'].forEach(mealType => {
+      const itemId = mealData[mealType];
+      if (itemId) {
+        // inventoryデータから実際の食事名を取得
+        let mealTitle = `${mealNames[mealType]}: ${itemId}`; // デフォルトはID
+
+        if (inventoryData[itemId] && inventoryData[itemId].name) {
+          mealTitle = `${mealNames[mealType]}: ${inventoryData[itemId].name}`;
+        } else {
+          // inventoryに存在しない場合は「不明な食事」として表示
+          mealTitle = `${mealNames[mealType]}: 不明な食事`;
+        }
+
+        const startDateTime = `${dateStr}T${mealTimes[mealType]}:00`;
+        // 1時間の食事イベントとして設定
+        const startDate = new Date(startDateTime);
+        const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // 1時間後
+        const endDateTime = endDate.toISOString().slice(0, 16); // YYYY-MM-DDTHH:mm形式
+
+        events.push({
+          id: `meal-${dateStr}-${mealType}`,
+          title: mealTitle,
+          startTime: startDateTime,
+          endTime: endDateTime,
+          allDay: false,
+          color: mealColors[mealType],
+          source: 'diet',
+          isTimetable: false,
+          createdAt: mealData.timestamp || new Date().toISOString(),
+          updatedAt: mealData.timestamp || new Date().toISOString(),
+          lastWriteClientId: 'diet-integration'
+        });
+      }
+    });
+  });
+
+  return events;
+}
+
+// 食事イベントをメインのイベントリストに統合
+function integrateMealEvents() {
+  // 既存の食事イベントを削除
+  events = events.filter(event => event.source !== 'diet');
+
+  // 新しい食事イベントを追加
+  events = [...events, ...mealEvents];
+
+  // イベントをソート
+  events.sort((a, b) => {
+    const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+    const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+    return aTime - bTime;
+  });
+}
+
 // イベントを読み込む関数（差分更新版）
 async function loadEvents() {
   if (!isFirebaseEnabled || !window.firebase?.db) {
@@ -383,42 +635,120 @@ async function loadEvents() {
     unsubscribeChildRemoved();
     unsubscribeChildRemoved = null;
   }
+  if (typeof unsubscribeShiftsChildAdded === 'function') {
+    unsubscribeShiftsChildAdded();
+    unsubscribeShiftsChildAdded = null;
+  }
+  if (typeof unsubscribeShiftsChildChanged === 'function') {
+    unsubscribeShiftsChildChanged();
+    unsubscribeShiftsChildChanged = null;
+  }
+  if (typeof unsubscribeShiftsChildRemoved === 'function') {
+    unsubscribeShiftsChildRemoved();
+    unsubscribeShiftsChildRemoved = null;
+  }
+  if (typeof unsubscribeWorkplacesChildAdded === 'function') {
+    unsubscribeWorkplacesChildAdded();
+    unsubscribeWorkplacesChildAdded = null;
+  }
+  if (typeof unsubscribeWorkplacesChildChanged === 'function') {
+    unsubscribeWorkplacesChildChanged();
+    unsubscribeWorkplacesChildChanged = null;
+  }
+  if (typeof unsubscribeWorkplacesChildRemoved === 'function') {
+    unsubscribeWorkplacesChildRemoved();
+    unsubscribeWorkplacesChildRemoved = null;
+  }
   
   const eventsRef = window.firebase.ref(window.firebase.db, "events");
-  
+  const shiftsRef = window.firebase.ref(window.firebase.db, "shifts");
+  const workplacesRef = window.firebase.ref(window.firebase.db, "workplaces");
+
+  // ptプロジェクトの職場データを読み込み
+  try {
+    const workplacesSnapshot = await window.firebase.get(workplacesRef);
+    const workplacesData = workplacesSnapshot.val();
+    if (workplacesData && typeof workplacesData === 'object' && !Array.isArray(workplacesData)) {
+      workplaces = Object.keys(workplacesData).map(key => ({
+        id: key,
+        ...workplacesData[key]
+      }));
+    } else {
+      workplaces = [];
+    }
+  } catch (error) {
+    workplaces = [];
+  }
+
   // 初回: 全件取得
   try {
     const snapshot = await window.firebase.get(eventsRef);
     const data = snapshot.val();
+    let allEvents = [];
+
     if (data && typeof data === 'object' && !Array.isArray(data)) {
       const newEvents = Object.keys(data).map(key => {
         const payload = data[key] || {};
         return normalizeEventFromSnapshot({ val: () => payload }, key);
       });
       const filteredEvents = newEvents.filter(ev => isEventInAllowedRange(ev, allowedRanges));
-      events = filteredEvents;
-      events.sort((a, b) => {
-        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
-        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
-        if (Number.isNaN(aTime)) return 1;
-        if (Number.isNaN(bTime)) return -1;
-        return aTime - bTime;
-      });
-      
-      // Firebase内の重複チェックを実行
-      try {
-        const { deleted } = await deduplicateFirebaseEvents();
-        if (deleted > 0) {
-        }
-      } catch (error) {
-      }
-
-      // 通知スケジュールを更新（ビュー更新はDOMContentLoadedで行う）
-      scheduleAllNotifications();
-    } else {
-      events = [];
-      // ビュー更新はDOMContentLoadedで行う
+      allEvents = filteredEvents;
     }
+
+    // シフトデータを読み込み
+    const shiftsSnapshot = await window.firebase.get(shiftsRef);
+    const shiftsData = shiftsSnapshot.val();
+
+    if (shiftsData && typeof shiftsData === 'object' && !Array.isArray(shiftsData)) {
+      const newShifts = Object.keys(shiftsData).map(key => {
+        const payload = shiftsData[key] || {};
+
+        // シフトデータをイベント形式に変換
+        // ptプロジェクトのロジックに合わせて職場の色を使用
+        let eventColor = '#3b82f6'; // デフォルトの青色（ptプロジェクトのデフォルト）
+        if (payload.workplaceId) {
+          const workplace = workplaces.find(w => w.id === payload.workplaceId);
+          if (workplace && workplace.color) {
+            eventColor = workplace.color;
+          }
+        } else if (payload.color) {
+          // workplaceIdがない場合は直接設定された色を使用
+          eventColor = payload.color;
+        }
+
+        const shiftAsEvent = {
+          ...payload,
+          id: key,
+          isTimetable: true,
+          color: eventColor,
+          source: 'shift'
+        };
+
+        return shiftAsEvent;
+      });
+      const filteredShifts = newShifts.filter(ev => isEventInAllowedRange(ev, allowedRanges));
+      allEvents = [...allEvents, ...filteredShifts];
+    }
+
+    events = allEvents;
+    events.sort((a, b) => {
+      const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+      const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+      if (Number.isNaN(aTime)) return 1;
+      if (Number.isNaN(bTime)) return -1;
+      return aTime - bTime;
+    });
+
+    // Firebase内の重複チェックを実行
+    try {
+      const { deleted } = await deduplicateFirebaseEvents();
+      if (deleted > 0) {
+      }
+    } catch (error) {
+    }
+
+    // 通知スケジュールを更新（ビュー更新はDOMContentLoadedで行う）
+    scheduleAllNotifications();
   } catch (error) {
     showMessage('予定の読み込みに失敗しました。ネットワークを確認してください。', 'error', 6000);
     return;
@@ -523,6 +853,201 @@ async function loadEvents() {
     showMessage('予定の削除に失敗しました。', 'error', 4000);
   });
   
+  // 職場用のリアルタイムリスナー設定
+  unsubscribeWorkplacesChildAdded = window.firebase.onChildAdded(workplacesRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+
+      const payload = snapshot.val() || {};
+      const newWorkplace = { id: key, ...payload };
+      workplaces.push(newWorkplace);
+
+      // この職場のシフトの色を更新
+      updateShiftsColorForWorkplace(key);
+    } catch (error) {
+    }
+  }, (error) => {
+  });
+
+  unsubscribeWorkplacesChildChanged = window.firebase.onChildChanged(workplacesRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+
+      const payload = snapshot.val() || {};
+      const updatedWorkplace = { id: key, ...payload };
+
+      const existingIndex = workplaces.findIndex(w => w.id === key);
+      if (existingIndex !== -1) {
+        workplaces[existingIndex] = updatedWorkplace;
+
+        // この職場のシフトの色を更新
+        updateShiftsColorForWorkplace(key);
+      }
+    } catch (error) {
+    }
+  }, (error) => {
+  });
+
+  unsubscribeWorkplacesChildRemoved = window.firebase.onChildRemoved(workplacesRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+
+      const existingIndex = workplaces.findIndex(w => w.id === key);
+      if (existingIndex !== -1) {
+        const removedWorkplace = workplaces[existingIndex];
+        workplaces.splice(existingIndex, 1);
+
+        // この職場のシフトの色をリセット
+        resetShiftsColorForWorkplace(key);
+      }
+    } catch (error) {
+    }
+  }, (error) => {
+  });
+
+  // シフト用のリアルタイムリスナー設定
+  unsubscribeShiftsChildAdded = window.firebase.onChildAdded(shiftsRef, (snapshot) => {
+    try {
+    const key = snapshot.key;
+    if (!key) return;
+
+    // シフトデータをイベント形式に変換
+    const payload = snapshot.val() || {};
+
+    // ptプロジェクトのロジックに合わせて職場の色を使用
+    let eventColor = '#3b82f6'; // デフォルトの青色（ptプロジェクトのデフォルト）
+    if (payload.workplaceId) {
+      const workplace = workplaces.find(w => w.id === payload.workplaceId);
+      if (workplace && workplace.color) {
+        eventColor = workplace.color;
+      }
+    } else if (payload.color) {
+      // workplaceIdがない場合は直接設定された色を使用
+      eventColor = payload.color;
+    }
+
+    const newShift = {
+      ...payload,
+      id: key,
+      isTimetable: true,
+      color: eventColor,
+      source: 'shift'
+    };
+
+    if (!isEventInAllowedRange(newShift, allowedRanges)) {
+      return;
+    }
+
+    // 既存のイベントをチェック（重複防止）
+    const existingIndex = events.findIndex(e => e.id === key);
+    if (existingIndex === -1) {
+      events.push(newShift);
+      events.sort((a, b) => {
+        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return aTime - bTime;
+      });
+      updateViewsForEvent(newShift);
+    } else {
+      // 既存イベントを更新（念のため）
+      events[existingIndex] = newShift;
+      updateViewsForEvent(newShift);
+    }
+    } catch (error) {
+      // エラーが発生してもアプリを停止させない
+    }
+  }, (error) => {
+    showMessage('シフトの追加に失敗しました。', 'error', 4000);
+  });
+
+  unsubscribeShiftsChildChanged = window.firebase.onChildChanged(shiftsRef, (snapshot) => {
+    try {
+    const key = snapshot.key;
+    if (!key) return;
+
+    // シフトデータをイベント形式に変換
+    const payload = snapshot.val() || {};
+
+    // ptプロジェクトのロジックに合わせて職場の色を使用
+    let eventColor = '#3b82f6'; // デフォルトの青色（ptプロジェクトのデフォルト）
+    if (payload.workplaceId) {
+      const workplace = workplaces.find(w => w.id === payload.workplaceId);
+      if (workplace && workplace.color) {
+        eventColor = workplace.color;
+      }
+    } else if (payload.color) {
+      // workplaceIdがない場合は直接設定された色を使用
+      eventColor = payload.color;
+    }
+
+    const updatedShift = {
+      ...payload,
+      id: key,
+      isTimetable: true,
+      color: eventColor,
+      source: 'shift'
+    };
+
+    const existingIndex = events.findIndex(e => e.id === key);
+
+    if (existingIndex !== -1) {
+      const oldEvent = events[existingIndex];
+      // updatedAt が変わっていない場合はスキップ（無限ループ防止）
+      if (oldEvent.updatedAt === updatedShift.updatedAt && oldEvent.lastWriteClientId === updatedShift.lastWriteClientId) {
+        return;
+      }
+
+      events[existingIndex] = updatedShift;
+      events.sort((a, b) => {
+        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return aTime - bTime;
+      });
+
+      const wasInRange = isEventInAllowedRange(oldEvent, allowedRanges);
+      const isInRange = isEventInAllowedRange(updatedShift, allowedRanges);
+
+      // 範囲外→範囲内、範囲内→範囲外、範囲内で日付変更の場合は更新
+      if (wasInRange || isInRange) {
+        updateViewsForEvent(updatedShift);
+        if (wasInRange && !isInRange) {
+          // 範囲外に移動した場合、旧日付も更新
+          updateViewsForEvent(oldEvent);
+        }
+      }
+      }
+    } catch (error) {
+      // エラーが発生してもアプリを停止させない
+    }
+  }, (error) => {
+    showMessage('シフトの更新に失敗しました。', 'error', 4000);
+  });
+
+  unsubscribeShiftsChildRemoved = window.firebase.onChildRemoved(shiftsRef, (snapshot) => {
+    try {
+    const key = snapshot.key;
+    if (!key) return;
+
+    const existingIndex = events.findIndex(e => e.id === key);
+    if (existingIndex !== -1) {
+      const removedEvent = events[existingIndex];
+      events.splice(existingIndex, 1);
+      updateViewsForEvent(removedEvent);
+      }
+    } catch (error) {
+      // エラーが発生してもアプリを停止させない
+    }
+  }, (error) => {
+    showMessage('シフトの削除に失敗しました。', 'error', 4000);
+  });
+
   // 統合解除関数
   unsubscribeEvents = () => {
     if (typeof unsubscribeChildAdded === 'function') {
@@ -536,6 +1061,30 @@ async function loadEvents() {
     if (typeof unsubscribeChildRemoved === 'function') {
       unsubscribeChildRemoved();
       unsubscribeChildRemoved = null;
+    }
+    if (typeof unsubscribeShiftsChildAdded === 'function') {
+      unsubscribeShiftsChildAdded();
+      unsubscribeShiftsChildAdded = null;
+    }
+    if (typeof unsubscribeShiftsChildChanged === 'function') {
+      unsubscribeShiftsChildChanged();
+      unsubscribeShiftsChildChanged = null;
+    }
+    if (typeof unsubscribeShiftsChildRemoved === 'function') {
+      unsubscribeShiftsChildRemoved();
+      unsubscribeShiftsChildRemoved = null;
+    }
+    if (typeof unsubscribeWorkplacesChildAdded === 'function') {
+      unsubscribeWorkplacesChildAdded();
+      unsubscribeWorkplacesChildAdded = null;
+    }
+    if (typeof unsubscribeWorkplacesChildChanged === 'function') {
+      unsubscribeWorkplacesChildChanged();
+      unsubscribeWorkplacesChildChanged = null;
+    }
+    if (typeof unsubscribeWorkplacesChildRemoved === 'function') {
+      unsubscribeWorkplacesChildRemoved();
+      unsubscribeWorkplacesChildRemoved = null;
     }
   };
 }
@@ -2436,9 +2985,9 @@ function createMonthDayElement(date, currentMonth) {
   dayNumber.textContent = date.getDate();
   div.appendChild(dayNumber);
   
-  // その日のイベント（時間割は月次ビューで非表示）
+  // その日のイベント（時間割と食事イベントは月次ビューで非表示）
   const dayEvents = getEventsByDate(date);
-  const visibleEvents = dayEvents.filter(event => event.isTimetable !== true);
+  const visibleEvents = dayEvents.filter(event => event.isTimetable !== true && event.source !== 'diet');
   const hasTimetableEvents = dayEvents.some(event => event.isTimetable === true);
 
   if (hasTimetableEvents) {
@@ -3486,6 +4035,12 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // イベントを読み込み（重複削除まで完了）
   await loadEvents();
+
+  // 食事データを読み込み
+  await loadMealData();
+
+  // 食事イベントをメインのイベントリストに統合
+  integrateMealEvents();
 
   // イベントリスナーを登録
   setupEventListeners();
