@@ -2985,9 +2985,9 @@ function createMonthDayElement(date, currentMonth) {
   dayNumber.textContent = date.getDate();
   div.appendChild(dayNumber);
   
-  // その日のイベント（時間割と食事イベントは月次ビューで非表示）
+  // その日のイベント（食事イベントのみ月次ビューで非表示、シフトは表示）
   const dayEvents = getEventsByDate(date);
-  const visibleEvents = dayEvents.filter(event => event.isTimetable !== true && event.source !== 'diet');
+  const visibleEvents = dayEvents.filter(event => event.source !== 'diet');
   const hasTimetableEvents = dayEvents.some(event => event.isTimetable === true);
 
   if (hasTimetableEvents) {
