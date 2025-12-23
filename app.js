@@ -428,14 +428,10 @@ async function loadMealData() {
       dietDatabase = getDatabase(dietApp);
     }
 
-    console.log('Loading meal data...');
-
     // inventoryデータを取得（食事名を取得するため）
     const inventoryRef = window.firebase.ref(dietDatabase, 'inventory');
     const inventorySnapshot = await window.firebase.get(inventoryRef);
     const inventoryData = inventorySnapshot.exists() ? inventorySnapshot.val() : {};
-
-    console.log('Inventory data loaded:', Object.keys(inventoryData).length, 'items');
 
     // weeklyPlanデータを取得（mealsの代わりにweeklyPlanを使用）
     const weeklyPlanRef = window.firebase.ref(dietDatabase, 'weeklyPlan');
@@ -443,15 +439,11 @@ async function loadMealData() {
 
     if (weeklyPlanSnapshot.exists()) {
       const weeklyPlanData = weeklyPlanSnapshot.val();
-      console.log('WeeklyPlan data loaded:', Object.keys(weeklyPlanData).length, 'entries');
       mealEvents = convertWeeklyPlanToEvents(weeklyPlanData, inventoryData);
-      console.log('食事データを読み込みました:', mealEvents.length, '件');
     } else {
       mealEvents = [];
-      console.log('週次献立データが存在しません');
     }
   } catch (error) {
-    console.error('食事データの読み込みに失敗しました:', error);
     mealEvents = [];
   }
 }
@@ -476,14 +468,11 @@ function convertWeeklyPlanToEvents(weeklyPlanData, inventoryData) {
   };
 
   Object.entries(weeklyPlanData).forEach(([key, itemId]) => {
-    console.log(`Processing weeklyPlan entry: ${key} = ${itemId}`);
     // weeklyPlanのキーは "YYYY-MM-DD-0", "YYYY-MM-DD-1", "YYYY-MM-DD-2" の形式
     const parts = key.split('-');
-    console.log(`Key parts:`, parts);
     if (parts.length === 4) {
       const dateStr = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
       const mealIndex = parseInt(parts[3]);
-      console.log(`Parsed: dateStr=${dateStr}, mealIndex=${mealIndex}, mealTime=${mealTimes[mealIndex]}`);
 
       if (itemId && mealIndex >= 0 && mealIndex <= 2) {
         // inventoryデータから実際の食事名を取得
@@ -497,7 +486,6 @@ function convertWeeklyPlanToEvents(weeklyPlanData, inventoryData) {
         }
 
         const startDateTime = `${dateStr}T${mealTimes[mealIndex]}:00`;
-        console.log(`Creating event: startTime=${startDateTime}`);
         // 1時間の食事イベントとして設定
         const startDate = new Date(startDateTime);
         const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // 1時間後
@@ -509,8 +497,6 @@ function convertWeeklyPlanToEvents(weeklyPlanData, inventoryData) {
         const endHours = String(endDate.getHours()).padStart(2, '0');
         const endMinutes = String(endDate.getMinutes()).padStart(2, '0');
         const endDateTime = `${endYear}-${endMonth}-${endDay}T${endHours}:${endMinutes}`;
-
-        console.log(`Event times: start=${startDateTime}, end=${endDateTime}`);
 
         events.push({
           id: `meal-${dateStr}-${mealIndex}`,
@@ -786,7 +772,6 @@ async function loadEvents() {
     }
     } catch (error) {
       // エラーが発生してもアプリを停止させない
-      console.error('[リアルタイム] エラー:', error);
     }
   }, (error) => {
     showMessage('予定の追加に失敗しました。', 'error', 4000);
@@ -4422,7 +4407,7 @@ function setupEventListeners() {
         // Firebaseに保存（addEvent関数内でローカル配列も更新される）
         const newId = await addEvent(newEvent);
         if (!newId) {
-          console.error('イベント作成に失敗しました');
+          // イベント作成失敗
         }
       } else if (editingEventId) {
         // 既存イベントを更新
@@ -4479,7 +4464,7 @@ function setupEventListeners() {
         // 新規イベントを作成（addEvent関数内でローカル配列も更新される）
         const newId = await addEvent(event);
         if (!newId) {
-          console.error('イベント作成に失敗しました');
+          // イベント作成失敗
         }
       }
       
