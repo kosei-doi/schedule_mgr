@@ -18,5 +18,9 @@
   "bugs": {
     "url": "https://github.com/kosei-doi/schedule_mgr/issues"
   },
-  "homepage": "https://github.com/kosei-doi/schedule_mgr#readme"
+  "homepage": "https://github.com/kosei-doi/schedule_mgr#readme",
+  "devDependencies": {
+    "sharp": "^0.34.5",
+    "svg2png-many": "^0.0.7"
+  }
 }
