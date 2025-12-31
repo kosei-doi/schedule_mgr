@@ -1,11 +1,11 @@
 // Service Worker for Schedule Management PWA
 const CACHE_NAME = 'schedule-manager-v1.0.0';
 const urlsToCache = [
-    '/',
-    '/index.html',
-    '/app.js',
-    '/styles.css',
-    '/site.webmanifest'
+    '/schedule_mgr/',
+    '/schedule_mgr/index.html',
+    '/schedule_mgr/app.js',
+    '/schedule_mgr/styles.css',
+    '/schedule_mgr/site.webmanifest'
 ];
 
 // Install event - cache resources
@@ -70,7 +70,7 @@ self.addEventListener('fetch', (event) => {
                 }).catch(() => {
                     // Return offline fallback for navigation requests
                     if (event.request.mode === 'navigate') {
-                        return caches.match('/index.html');
+                        return caches.match('/schedule_mgr/index.html');
                     }
                 });
             })
