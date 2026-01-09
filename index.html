@@ -23,12 +23,12 @@
     <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='750' height='1334' viewBox='0 0 750 1334' fill='none'%3E%3Crect width='750' height='1334' fill='%23ffffff'/%3E%3Ctext x='375' y='667' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
     <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1125' height='2436' viewBox='0 0 1125 2436' fill='none'%3E%3Crect width='1125' height='2436' fill='%23ffffff'/%3E%3Ctext x='562.5' y='1218' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
     <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='828' height='1792' viewBox='0 0 828 1792' fill='none'%3E%3Crect width='828' height='1792' fill='%23ffffff'/%3E%3Ctext x='414' y='896' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
-    <link rel="icon" type="image/png" sizes="32x32" href="/schedule_mgr/icon-192.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="icon-192.png">
     <!-- iOS App Icons -->
-    <link rel="apple-touch-icon" sizes="180x180" href="/schedule_mgr/icon-180.png">
-    <link rel="apple-touch-icon" sizes="152x152" href="/schedule_mgr/icon-180.png">
-    <link rel="apple-touch-icon" sizes="120x120" href="/schedule_mgr/icon-180.png">
-    <link rel="apple-touch-icon" sizes="76x76" href="/schedule_mgr/icon-180.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="icon-180.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="icon-180.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="icon-180.png">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -70,7 +70,7 @@
         // Register Service Worker for PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/schedule_mgr/sw.js', { scope: '/schedule_mgr/' })
+                navigator.serviceWorker.register('sw.js', { scope: './' })
                     .then((registration) => {
                         console.log('Service Worker registered successfully:', registration.scope);
                     })

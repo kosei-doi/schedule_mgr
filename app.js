@@ -8,6 +8,8 @@ let unsubscribeShiftsChildRemoved = null;
 let unsubscribeWorkplacesChildAdded = null;
 let unsubscribeWorkplacesChildChanged = null;
 let unsubscribeWorkplacesChildRemoved = null;
+let unsubscribeCombiSemesters = null;
+let unsubscribeCombiTasks = null;
 
 // イベントリスナーのクリーンアップ用
 const eventListeners = {
@@ -2395,7 +2397,12 @@ function populateEventElement(element, event, options = {}) {
   if (isAllDay) element.classList.add('all-day');
   if (event.isTimetable === true) element.classList.add('timetable-event');
   if (isMobile && currentView === 'week' && !isAllDay) element.classList.add('mobile-week');
-  element.style.backgroundColor = event.color || '#3b82f6';
+  // 授業スケジュールは緑色に統一（シフト由来のisTimetableは除外）
+  let bgColor = event.color || '#3b82f6';
+  if (event.isTimetable === true && event.source !== 'shift') {
+    bgColor = '#10b981';
+  }
+  element.style.backgroundColor = bgColor;
   element.dataset.eventId = event.id;
   if (event.isTimetable === true) {
     element.dataset.isTimetable = 'true';
@@ -2458,13 +2465,29 @@ function bindEventElementInteractions(element) {
   element.addEventListener('click', (e) => {
     e.stopPropagation();
     const id = element.dataset.eventId;
-    if (id) showEventModal(id);
+    if (!id) return;
+    
+    // 授業スケジュール（combi-timetable）は編集不可
+    const event = events.find(e => e.id === id);
+    if (event && event.source === 'combi-timetable' && event.isTimetable === true) {
+      return; // クリックしても何もしない
+    }
+    
+    showEventModal(id);
   });
   element.addEventListener('keypress', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       const id = element.dataset.eventId;
-      if (id) showEventModal(id);
+      if (!id) return;
+      
+      // 授業スケジュール（combi-timetable）は編集不可
+      const event = events.find(e => e.id === id);
+      if (event && event.source === 'combi-timetable' && event.isTimetable === true) {
+        return; // キー入力しても何もしない
+      }
+      
+      showEventModal(id);
     }
   });
 }
@@ -2970,9 +2993,12 @@ function createMonthDayElement(date, currentMonth) {
   dayNumber.textContent = date.getDate();
   div.appendChild(dayNumber);
   
-  // その日のイベント（食事イベントのみ月次ビューで非表示、シフトは表示）
+  // その日のイベント（食事イベントと授業スケジュールは月次ビューで非表示、シフトは表示）
   const dayEvents = getEventsByDate(date);
-  const visibleEvents = dayEvents.filter(event => event.source !== 'diet');
+  const visibleEvents = dayEvents.filter(event => 
+    event.source !== 'diet' && 
+    !(event.source === 'combi-timetable' && event.isTimetable === true)
+  );
   const hasTimetableEvents = dayEvents.some(event => event.isTimetable === true);
 
   if (hasTimetableEvents) {
@@ -2990,8 +3016,11 @@ function createMonthDayElement(date, currentMonth) {
       const eventElement = document.createElement('div');
       eventElement.className = 'month-event-item';
       
-      // イベントの色を背景色として使用
-      const eventColor = event.color || '#3b82f6';
+      // イベントの色を背景色として使用（授業スケジュールは緑色に統一、シフトは除外）
+      let eventColor = event.color || '#3b82f6';
+      if (event.isTimetable === true && event.source !== 'shift') {
+        eventColor = '#10b981';
+      }
       eventElement.style.backgroundColor = eventColor;
       
       // 背景色に応じて文字色を調整（明るい色の場合は暗い文字、暗い色の場合は明るい文字）
@@ -3031,6 +3060,10 @@ function createMonthDayElement(date, currentMonth) {
         : `${safeTitle} (${formatTime(event.startTime)})`;
       eventElement.addEventListener('click', (e) => {
         e.stopPropagation();
+        // 授業スケジュール（combi-timetable）は編集不可
+        if (event.source === 'combi-timetable' && event.isTimetable === true) {
+          return; // クリックしても何もしない
+        }
         showEventModal(event.id);
       });
       eventsContainer.appendChild(eventElement);
@@ -3685,6 +3718,379 @@ async function importTimetableFromData(data) {
   return importedCount;
 }
 
+// ============================================
+// 学習管理アプリ（combi）連携機能
+// ============================================
+
+// 科目名に応じた色を自動割り当て（ハッシュベース）
+function assignColorToSubject(subjectName) {
+  if (!subjectName || typeof subjectName !== 'string') {
+    return '#3b82f6'; // デフォルトの青色
+  }
+  
+  const colors = [
+    '#3b82f6', // 青
+    '#10b981', // 緑
+    '#f59e0b', // 黄
+    '#ef4444', // 赤
+    '#8b5cf6', // 紫
+    '#ec4899', // ピンク
+    '#06b6d4', // シアン
+    '#84cc16', // ライム
+    '#f97316', // オレンジ
+    '#6366f1'  // インディゴ
+  ];
+  
+  // 科目名のハッシュ値を計算して色を決定
+  let hash = 0;
+  for (let i = 0; i < subjectName.length; i++) {
+    hash = subjectName.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
+// 学習管理アプリの現在の学期IDを取得
+function getCombiCurrentSemesterId(semestersObj) {
+  if (!semestersObj || typeof semestersObj !== 'object') {
+    return null;
+  }
+  
+  const semesters = Object.values(semestersObj);
+  if (semesters.length === 0) {
+    return null;
+  }
+  
+  // localStorageから保存されたcurrentSemesterIdを取得
+  const savedId = localStorage.getItem('currentSemesterId');
+  if (savedId && semestersObj[savedId]) {
+    return savedId;
+  }
+  
+  // フォールバック: startDateが最新のものを選択
+  const sorted = semesters.slice().sort((a, b) => {
+    const aDate = new Date(a.startDate || a.createdAt || 0).getTime();
+    const bDate = new Date(b.startDate || b.createdAt || 0).getTime();
+    return bDate - aDate; // 新しい順
+  });
+  
+  return sorted[0]?.id || null;
+}
+
+// 学習管理アプリから学期データとタスクデータを読み込む
+async function loadCombiData() {
+  if (!await waitForFirebase() || !window.firebase?.db) {
+    return { semester: null, tasks: {} };
+  }
+  
+  try {
+    const db = window.firebase.db;
+    const semestersRef = window.firebase.ref(db, 'semesters');
+    const tasksRef = window.firebase.ref(db, 'tabler/tasks');
+    
+    const [semestersSnap, tasksSnap] = await Promise.all([
+      window.firebase.get(semestersRef),
+      window.firebase.get(tasksRef)
+    ]);
+    
+    const semestersData = semestersSnap.exists() ? semestersSnap.val() : {};
+    const currentSemesterId = getCombiCurrentSemesterId(semestersData);
+    const semester = currentSemesterId ? semestersData[currentSemesterId] : null;
+    
+    // タスクデータを読み込み（現在の学期のタスクのみ）
+    const allTasks = tasksSnap.exists() ? tasksSnap.val() : {};
+    const semesterTasks = {};
+    
+    if (currentSemesterId) {
+      Object.entries(allTasks).forEach(([taskId, task]) => {
+        if (task && task.semesterId === currentSemesterId) {
+          semesterTasks[taskId] = task;
+        }
+      });
+    }
+    
+    return { semester, tasks: semesterTasks };
+  } catch (error) {
+    console.error('学習管理アプリのデータ読み込みに失敗:', error);
+    return { semester: null, tasks: {} };
+  }
+}
+
+// 授業日と時間割を組み合わせてイベントを作成・同期
+async function syncTimetableEvents() {
+  const { semester } = await loadCombiData();
+  
+  if (!semester || !Array.isArray(semester.classDays) || !Array.isArray(semester.timetable)) {
+    return 0;
+  }
+  
+  const classDays = semester.classDays;
+  const timetableGrid = semester.timetable;
+  
+  // 時間割の時間帯（combiアプリと同じ）
+  const periodTimes = [
+    { start: '08:50', end: '10:30' },  // 1限
+    { start: '10:40', end: '12:20' },  // 2限
+    { start: '13:10', end: '14:50' },  // 3限
+    { start: '15:05', end: '16:45' },  // 4限
+    { start: '17:00', end: '18:40' }   // 5限
+  ];
+  
+  // 曜日のマッピング（0=月、1=火、2=水、3=木、4=金）
+  const weekdayMap = {
+    0: '月', 1: '火', 2: '水', 3: '木', 4: '金'
+  };
+  
+  let importedCount = 0;
+  
+  // 各授業日について処理
+  for (const classDate of classDays) {
+    if (!classDate || typeof classDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(classDate)) {
+      continue;
+    }
+    
+    // 授業日の曜日を取得（0=日、1=月、...、6=土）
+    const dateObj = new Date(classDate + 'T00:00:00');
+    const dayOfWeek = dateObj.getDay();
+    
+    // 月〜金のみ処理（0=日、6=土はスキップ）
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      continue;
+    }
+    
+    // 時間割の曜日インデックス（0=月、1=火、2=水、3=木、4=金）
+    const timetableDayIndex = dayOfWeek - 1;
+    
+    // 各限（1-5限）について処理
+    for (let periodIndex = 0; periodIndex < timetableGrid.length && periodIndex < periodTimes.length; periodIndex++) {
+      const subjectsForPeriod = timetableGrid[periodIndex];
+      if (!Array.isArray(subjectsForPeriod)) {
+        continue;
+      }
+      
+      const subjectName = subjectsForPeriod[timetableDayIndex];
+      if (!subjectName || typeof subjectName !== 'string' || subjectName.trim() === '') {
+        continue;
+      }
+      
+      const periodTime = periodTimes[periodIndex];
+      if (!periodTime || !periodTime.start || !periodTime.end) {
+        continue;
+      }
+      
+      const startTime = `${classDate}T${periodTime.start}`;
+      const endTime = `${classDate}T${periodTime.end}`;
+      const descriptionLabel = `${periodIndex + 1}限`;
+      
+      // 重複チェック（既存のisTimetableイベントと比較）
+      const duplicate = Array.isArray(events) ? events.find(e =>
+        e.startTime === startTime &&
+        e.endTime === endTime &&
+        (e.title || '').trim() === subjectName.trim() &&
+        (e.description || '').includes(descriptionLabel) &&
+        e.isTimetable === true &&
+        e.source !== 'combi-task' // タスクイベントは除外
+      ) : null;
+      
+      if (duplicate) {
+        continue;
+      }
+      
+      // 授業スケジュールは緑色に統一
+      const color = '#10b981';
+      
+      const newEvent = {
+        title: subjectName.trim(),
+        description: descriptionLabel,
+        startTime,
+        endTime,
+        color: color,
+        allDay: false,
+        recurrence: 'none',
+        recurrenceEnd: '',
+        reminderMinutes: null,
+        isTimetable: true,
+        source: 'combi-timetable'
+      };
+      
+      const newId = await addEvent(newEvent, { syncGoogle: false });
+      if (newId) {
+        importedCount++;
+      }
+    }
+  }
+  
+  return importedCount;
+}
+
+// タスクを期限日の終日イベントとして同期（未完了タスクのみ）
+async function syncTaskEvents() {
+  const { tasks } = await loadCombiData();
+  
+  if (!tasks || typeof tasks !== 'object') {
+    return 0;
+  }
+
+  // 既存のcombiタスク由来イベントは一度全て削除し、未完了タスクだけを再生成する
+  if (Array.isArray(events)) {
+    const combiTaskEvents = events.filter(e => e && e.source === 'combi-task');
+    for (const ev of combiTaskEvents) {
+      // Googleカレンダーとは同期しない
+      await deleteEvent(ev.id, { syncGoogle: false });
+    }
+  }
+  
+  let importedCount = 0;
+  
+  // 各タスクについて処理（未完了タスクのみ）
+  for (const [taskId, task] of Object.entries(tasks)) {
+    if (!task || typeof task !== 'object') {
+      continue;
+    }
+
+    // 完了タスクは表示しない
+    if (task.completed) {
+      continue;
+    }
+    
+    // 期限日が設定されていないタスクはスキップ
+    if (!task.dueDate || typeof task.dueDate !== 'string') {
+      continue;
+    }
+    
+    // 期限日の形式を確認（YYYY-MM-DD）
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(task.dueDate)) {
+      continue;
+    }
+    
+    // タスクタイプと内容・タイトルを取得
+    const taskType = task.taskType || '課題';
+    const content = task.content || '';
+    const baseTitle = typeof task.title === 'string' ? task.title.trim() : '';
+    
+    // カレンダー上のタイトルは「科目：種別」の形式で表示
+    // 科目名（baseTitle）があればそれを使い、なければ内容か種別を使う
+    const subjectLabel = baseTitle || (content.trim() || taskType);
+    const calendarTitle = `${subjectLabel}：${taskType}`;
+    
+    // 終日イベントとして作成（期限日の00:00:00から23:59:59まで）
+    const startTime = `${task.dueDate}T00:00:00`;
+    const endTime = `${task.dueDate}T23:59:59`;
+    
+    // 重複チェック（既存のタスクイベントと比較）
+    const duplicate = Array.isArray(events) ? events.find(e =>
+      e.source === 'combi-task' &&
+      e.startTime === startTime &&
+      (e.title || '').trim() === calendarTitle.trim()
+    ) : null;
+    
+    if (duplicate) {
+      continue;
+    }
+    
+    // タスクタイプに応じた色を設定
+    let color = '#3b82f6'; // デフォルトの青色
+    if (taskType === 'レポート') {
+      color = '#ef4444'; // 赤
+    } else if (taskType === 'テスト') {
+      color = '#f59e0b'; // 黄
+    } else if (taskType === '課題') {
+      color = '#10b981'; // 緑
+    }
+    
+    const newEvent = {
+      title: calendarTitle,
+      // descriptionにはIDと種別・内容を入れておく（IDは削除・同期用のキーとして使用）
+      description: content.trim()
+        ? `タスクID: ${taskId}\n種別: ${taskType}\n内容: ${content.trim()}`
+        : `タスクID: ${taskId}\n種別: ${taskType}`,
+      startTime: startTime,
+      endTime: endTime,
+      color: color,
+      allDay: true,
+      recurrence: 'none',
+      recurrenceEnd: '',
+      reminderMinutes: null,
+      isTimetable: false,
+      source: 'combi-task'
+    };
+    
+    const newId = await addEvent(newEvent, { syncGoogle: false });
+    if (newId) {
+      importedCount++;
+    }
+  }
+  
+  return importedCount;
+}
+
+// 学習管理アプリ（combi）の自動同期を設定
+function setupCombiAutoSync() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    return;
+  }
+  
+  const db = window.firebase.db;
+  let syncInProgress = false;
+  let syncTimeoutId = null;
+  
+  // 同期を実行する関数（デバウンス付き）
+  const performSync = async () => {
+    if (syncInProgress) {
+      return;
+    }
+    
+    syncInProgress = true;
+    
+    try {
+      // 時間割イベントの同期
+      const timetableCount = await syncTimetableEvents();
+      
+      // タスクイベントの同期
+      const taskCount = await syncTaskEvents();
+      
+      // 同期後にビューを更新
+      if (timetableCount > 0 || taskCount > 0) {
+        updateViews();
+      }
+    } catch (error) {
+      console.error('学習管理アプリの同期に失敗:', error);
+    } finally {
+      syncInProgress = false;
+    }
+  };
+  
+  // デバウンス付き同期関数
+  const debouncedSync = () => {
+    if (syncTimeoutId) {
+      clearTimeout(syncTimeoutId);
+    }
+    syncTimeoutId = setTimeout(performSync, 1000); // 1秒後に実行
+  };
+  
+  // 学期データの変更を監視
+  const semestersRef = window.firebase.ref(db, 'semesters');
+  unsubscribeCombiSemesters = window.firebase.onValue(semestersRef, (snapshot) => {
+    if (snapshot.exists()) {
+      debouncedSync();
+    }
+  }, (error) => {
+    console.error('学期データの監視エラー:', error);
+  });
+  
+  // タスクデータの変更を監視
+  const tasksRef = window.firebase.ref(db, 'tabler/tasks');
+  unsubscribeCombiTasks = window.firebase.onValue(tasksRef, (snapshot) => {
+    if (snapshot.exists()) {
+      debouncedSync();
+    }
+  }, (error) => {
+    console.error('タスクデータの監視エラー:', error);
+  });
+  
+  // 初回同期を実行（少し遅延させて他の初期化処理が完了してから）
+  setTimeout(performSync, 2000);
+}
+
 // 日付計算
 function addDays(date, days) {
   const result = new Date(date);
@@ -4050,6 +4456,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // 自動同期を設定（定期実行のみ）
   startAutomaticGoogleSync();
+
+  // 学習管理アプリ（combi）の自動同期を設定
+  setupCombiAutoSync();
 
   // すべての初期化処理完了後にローディング画面を非表示
   hideLoading();
@@ -4731,7 +5140,8 @@ function attachResizeHandlers() {
       return;
     }
 
-    if (eventData.isTimetable === true) {
+    // 授業スケジュール（combi-timetable）は編集不可
+    if (eventData.isTimetable === true || (eventData.source === 'combi-timetable' && eventData.isTimetable === true)) {
       if (topHandle) topHandle.style.display = 'none';
       if (bottomHandle) bottomHandle.style.display = 'none';
       item.classList.add('timetable-locked');
@@ -4760,7 +5170,8 @@ function attachResizeHandlers() {
       return (e) => {
         e.stopPropagation();
         const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
-        if (!ev || ev.isTimetable === true || !ev.startTime || !ev.endTime) return;
+        // 授業スケジュール（combi-timetable）は編集不可
+        if (!ev || ev.isTimetable === true || (ev.source === 'combi-timetable' && ev.isTimetable === true) || !ev.startTime || !ev.endTime) return;
         const startDate = new Date(ev.startTime);
         const endDate = new Date(ev.endTime);
         if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return;
@@ -4781,7 +5192,8 @@ function attachResizeHandlers() {
       
       e.stopPropagation();
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
-      if (!ev || ev.isTimetable === true || !ev.startTime || !ev.endTime) return;
+      // 授業スケジュール（combi-timetable）は編集不可
+      if (!ev || ev.isTimetable === true || (ev.source === 'combi-timetable' && ev.isTimetable === true) || !ev.startTime || !ev.endTime) return;
       const startDate = new Date(ev.startTime);
       const endDate = new Date(ev.endTime);
       if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return;
@@ -4806,7 +5218,8 @@ function attachResizeHandlers() {
       e.preventDefault(); // スクロールを防ぐ
       e.stopPropagation();
       const ev = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
-      if (!ev || ev.isTimetable === true) return;
+      // 授業スケジュール（combi-timetable）は編集不可
+      if (!ev || ev.isTimetable === true || (ev.source === 'combi-timetable' && ev.isTimetable === true)) return;
       
       
       if (!e.touches || e.touches.length === 0) return;
