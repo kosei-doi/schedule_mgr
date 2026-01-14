@@ -1474,7 +1474,7 @@ body.modal-open {
   /* スマホ版：丸をview-toggleの右上に配置 */
   .view-toggle .google-sync-indicator {
     position: absolute;
-    top: -4px;
+    top: -24px;
     right: -4px;
     margin: 0;
     z-index: 10;
