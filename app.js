@@ -56,6 +56,13 @@ let dietDatabase = null; // diet_mgrのFirebaseデータベース参照
 let workplaces = []; // ptプロジェクトの職場データ
 const clientId = (() => Date.now().toString(36) + Math.random().toString(36).slice(2))();
 
+// Google同期状態管理
+let googleSyncStatus = 'unsynced'; // 'unsynced' | 'syncing' | 'synced' | 'error'
+let hasUnsyncedGoogleChanges = false; // ローカル変更が未同期かどうか
+let googleSyncStartTime = null; // 同期開始時刻（Dateオブジェクト）
+let googleSyncLastDuration = null; // 最後の同期にかかった時間（ミリ秒）
+let googleSyncTooltipTimerId = null; // ツールチップのリアルタイム更新用タイマーID
+
 // 職場変更時に該当するシフトの色を更新
 function updateShiftsColorForWorkplace(workplaceId) {
   // 型チェック
@@ -279,6 +286,173 @@ function hideLoading() {
   if (overlay) {
     overlay.classList.add('hidden');
   } else {
+  }
+}
+
+// Google同期ステータスインジケータを更新
+function updateGoogleSyncIndicator(status, options = {}) {
+  const { checkUnsyncedChanges = true } = options;
+  
+  // ステータスを更新
+  googleSyncStatus = status;
+  
+  // 同期開始時刻を記録
+  if (status === 'syncing' && !googleSyncStartTime) {
+    googleSyncStartTime = new Date();
+  } else if (status !== 'syncing' && googleSyncStartTime) {
+    // 同期終了時に経過時間を記録
+    googleSyncLastDuration = Date.now() - googleSyncStartTime.getTime();
+    googleSyncStartTime = null;
+  }
+  
+  // インジケータ要素を取得
+  const indicator = safeGetElementById('googleSyncIndicator');
+  if (!indicator) return;
+  
+  // 既存のステータスクラスを削除
+  indicator.classList.remove('status-synced', 'status-syncing', 'status-error', 'status-unsynced');
+  
+  // 実際の表示状態を決定
+  let displayStatus = status;
+  if (status === 'synced' && checkUnsyncedChanges && hasUnsyncedGoogleChanges) {
+    displayStatus = 'unsynced';
+  }
+  
+  // ステータスに応じてクラスとタイトルを設定
+  let titleText = '';
+  switch (displayStatus) {
+    case 'synced':
+      indicator.classList.add('status-synced');
+      titleText = 'Google同期: 同期済み';
+      break;
+    case 'syncing':
+      indicator.classList.add('status-syncing');
+      titleText = 'Google同期: 同期中';
+      break;
+    case 'error':
+      indicator.classList.add('status-error');
+      titleText = 'Google同期: エラー';
+      break;
+    case 'unsynced':
+    default:
+      indicator.classList.add('status-unsynced');
+      titleText = 'Google同期: 未完了';
+      break;
+  }
+  
+  indicator.title = titleText;
+}
+
+// Google同期ステータスの詳細情報を取得
+function getGoogleSyncStatusInfo() {
+  let statusText = '';
+  let timeText = '';
+  
+  switch (googleSyncStatus) {
+    case 'synced':
+      statusText = '同期済み';
+      break;
+    case 'syncing':
+      statusText = '同期中';
+      if (googleSyncStartTime) {
+        const elapsed = Date.now() - googleSyncStartTime.getTime();
+        const seconds = Math.floor(elapsed / 1000);
+        timeText = `経過時間: ${seconds}秒`;
+      }
+      break;
+    case 'error':
+      statusText = 'エラー';
+      break;
+    case 'unsynced':
+    default:
+      statusText = '未同期';
+      break;
+  }
+  
+  if (hasUnsyncedGoogleChanges && googleSyncStatus !== 'syncing') {
+    statusText += ' (未同期の変更あり)';
+  }
+  
+  if (googleSyncLastDuration !== null && googleSyncStatus !== 'syncing') {
+    const seconds = Math.floor(googleSyncLastDuration / 1000);
+    const milliseconds = googleSyncLastDuration % 1000;
+    if (seconds > 0) {
+      timeText = `前回の同期時間: ${seconds}.${Math.floor(milliseconds / 100)}秒`;
+    } else {
+      timeText = `前回の同期時間: ${milliseconds}ms`;
+    }
+  }
+  
+  return {
+    status: statusText,
+    time: timeText
+  };
+}
+
+// Google同期ステータスツールチップを表示
+function showGoogleSyncStatusTooltip(event) {
+  // 既存のタイマーがあればクリア
+  if (googleSyncTooltipTimerId !== null) {
+    clearInterval(googleSyncTooltipTimerId);
+    googleSyncTooltipTimerId = null;
+  }
+
+  const info = getGoogleSyncStatusInfo();
+  let message = `Google同期: ${info.status}`;
+  if (info.time) {
+    message += `\n${info.time}`;
+  }
+  
+  // ツールチップ要素を作成または取得
+  let tooltip = document.getElementById('googleSyncTooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'googleSyncTooltip';
+    tooltip.className = 'google-sync-tooltip';
+    document.body.appendChild(tooltip);
+  }
+  
+  // メッセージを設定（改行を<br>に変換）
+  tooltip.innerHTML = message.replace(/\n/g, '<br>');
+  
+  // 位置を計算
+  const indicator = safeGetElementById('googleSyncIndicator');
+  if (indicator) {
+    const rect = indicator.getBoundingClientRect();
+    tooltip.style.left = `${rect.left + rect.width / 2}px`;
+    tooltip.style.top = `${rect.bottom + 8}px`;
+    tooltip.style.transform = 'translateX(-50%)';
+    tooltip.classList.add('visible');
+  }
+
+  // 同期中は経過秒数をリアルタイム更新
+  if (googleSyncStatus === 'syncing' && googleSyncStartTime) {
+    googleSyncTooltipTimerId = setInterval(() => {
+      const tooltipEl = document.getElementById('googleSyncTooltip');
+      if (!tooltipEl || !tooltipEl.classList.contains('visible')) {
+        clearInterval(googleSyncTooltipTimerId);
+        googleSyncTooltipTimerId = null;
+        return;
+      }
+      const updatedInfo = getGoogleSyncStatusInfo();
+      let updatedMessage = `Google同期: ${updatedInfo.status}`;
+      if (updatedInfo.time) {
+        updatedMessage += `\n${updatedInfo.time}`;
+      }
+      tooltipEl.innerHTML = updatedMessage.replace(/\n/g, '<br>');
+    }, 500);
+  }
+}
+
+// Google同期ステータスツールチップを非表示
+function hideGoogleSyncStatusTooltip() {
+  if (googleSyncTooltipTimerId !== null) {
+    clearInterval(googleSyncTooltipTimerId);
+    googleSyncTooltipTimerId = null;
+  }
+  const tooltip = document.getElementById('googleSyncTooltip');
+  if (tooltip) {
+    tooltip.classList.remove('visible');
   }
 }
 
@@ -1079,8 +1253,13 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
     if (!silent) {
       showMessage(message, 'error', 6000);
     }
+    updateGoogleSyncIndicator('error');
     throw new Error(message);
   }
+  
+  // バックグラウンド処理として実行（ローディングオーバーレイは表示しない）
+  // ステータスインジケータのみ更新
+  updateGoogleSyncIndicator('syncing');
 
   const filteredUpserts = Array.isArray(upserts)
     ? upserts.filter(ev => ev && ev.id && ev.isTimetable !== true)
@@ -1110,6 +1289,8 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
     : [];
 
   if (filteredUpserts.length === 0 && filteredDeletes.length === 0) {
+    // 同期対象がない場合は未同期変更があればunsynced、なければsynced
+    updateGoogleSyncIndicator(hasUnsyncedGoogleChanges ? 'unsynced' : 'synced');
     return { created: 0, updated: 0, deleted: 0, skipped: 0 };
   }
 
@@ -1129,13 +1310,17 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
       mode: 'cors',
     });
   } catch (error) {
-    showMessage('Googleカレンダー更新に失敗しました。ネットワークを確認してください。', 'error', 6000);
+    updateGoogleSyncIndicator('error');
+    if (!silent) {
+      showMessage('Googleカレンダー更新に失敗しました。ネットワークを確認してください。', 'error', 6000);
+    }
     throw error;
   }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
     const message = `Googleカレンダー更新に失敗しました (${response.status}) ${errorText || ''}`.trim();
+    updateGoogleSyncIndicator('error');
     if (!silent) {
       showMessage(message, 'error', 6000);
     }
@@ -1147,6 +1332,7 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
     result = await response.json();
   } catch (error) {
     const message = 'Googleカレンダー応答の解析に失敗しました。';
+    updateGoogleSyncIndicator('error');
     if (!silent) {
       showMessage(message, 'error', 6000);
     }
@@ -1155,11 +1341,16 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
 
   if (result?.success === false) {
     const message = result?.message || 'Googleカレンダー更新に失敗しました。';
+    updateGoogleSyncIndicator('error');
     if (!silent) {
       showMessage(message, 'error', 6000);
     }
     throw new Error(message);
   }
+
+  // 同期成功時は未同期変更フラグをリセット
+  hasUnsyncedGoogleChanges = false;
+  updateGoogleSyncIndicator('synced');
 
   if (!silent) {
     showMessage('Googleカレンダーを更新しました。', 'success', 4000);
@@ -1177,6 +1368,7 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
   if (!GOOGLE_APPS_SCRIPT_ENDPOINT) {
     const message = 'Google Apps Script の Web アプリ URL が設定されていません。';
     if (!silent) showMessage(message, 'error', 6000);
+    updateGoogleSyncIndicator('error');
     throw new Error(message);
   }
 
@@ -1186,26 +1378,28 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
   if (!isFirebaseEnabled) {
     const message = 'Firebaseとの同期完了後に再度お試しください。';
     if (!silent) showMessage(message, 'error', 6000);
+    updateGoogleSyncIndicator('error');
     throw new Error(message);
   }
   
-  if (!silent) {
-    showLoading('スケジュールマネージャーを起動中...');
-  }
+  // ローディングオーバーレイは表示しない（バックグラウンド処理）
+  // ステータスインジケータのみ更新
+  updateGoogleSyncIndicator('syncing');
 
   if (!Array.isArray(events) || events.length === 0) {
     if (!silent) {
-      hideLoading();
       showMessage('同期対象の予定がありません。', 'info', 4000);
     }
+    // 未同期変更があればunsynced、なければsynced
+    updateGoogleSyncIndicator(hasUnsyncedGoogleChanges ? 'unsynced' : 'synced');
     return { created: 0, updated: 0, skipped: 0 };
   }
 
   if (!Array.isArray(events)) {
     if (!silent) {
-      hideLoading();
       showMessage('イベントデータが読み込まれていません。', 'error', 6000);
     }
+    updateGoogleSyncIndicator('error');
     return { created: 0, updated: 0, skipped: 0 };
   }
 
@@ -1219,9 +1413,10 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
   );
   if (syncableEvents.length === 0) {
     if (!silent) {
-      hideLoading();
       showMessage('Google同期対象のローカル予定がありません。', 'info', 4000);
     }
+    // 未同期変更があればunsynced、なければsynced
+    updateGoogleSyncIndicator(hasUnsyncedGoogleChanges ? 'unsynced' : 'synced');
     return { created: 0, updated: 0, skipped: 0 };
   }
 
@@ -1240,8 +1435,8 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
       mode: 'cors',
     });
   } catch (error) {
+    updateGoogleSyncIndicator('error');
     if (!silent) {
-      hideLoading();
       showMessage('Googleカレンダー同期に失敗しました。ネットワークを確認してください。', 'error', 6000);
     }
     throw error;
@@ -1250,8 +1445,8 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
     const message = `Google Apps Script 呼び出しに失敗しました (${response.status}) ${errorText || ''}`.trim();
+    updateGoogleSyncIndicator('error');
     if (!silent) {
-      hideLoading();
       showMessage(message, 'error', 6000);
     }
     throw new Error(message);
@@ -1262,8 +1457,9 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     result = await response.json();
   } catch (error) {
     // レスポンスがJSONでない場合はそのまま成功扱い
+    // 同期成功として扱う（未同期変更があればunsynced、なければsynced）
+    updateGoogleSyncIndicator(hasUnsyncedGoogleChanges ? 'unsynced' : 'synced');
     if (!silent) {
-      hideLoading();
       showMessage('Googleカレンダーと同期しました。', 'success', 5000);
     }
     return { created: 0, updated: 0, skipped: 0 };
@@ -1277,11 +1473,13 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
       ? result.message.trim()
       : 'Googleカレンダーと同期しました。';
 
+  // 同期成功時は未同期変更フラグをリセット
+  hasUnsyncedGoogleChanges = false;
+  updateGoogleSyncIndicator('synced');
+
   if (!silent) {
-    hideLoading();
     showMessage(`${message} (作成:${created} / 更新:${updated} / スキップ:${skipped})`, 'success', 6000);
   }
-  // silentモードではローディングを表示していないので、非表示にする必要はない
   
   return { created, updated, skipped };
 }
@@ -1290,23 +1488,24 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   if (!GOOGLE_APPS_SCRIPT_ENDPOINT) {
     const message = 'Google Apps Script の Web アプリ URL が設定されていません。';
     if (!silent) showMessage(message, 'error', 6000);
+    updateGoogleSyncIndicator('error');
     throw new Error(message);
   }
 
   const rangeSet = getAllowedDateRanges();
   logAllowedRanges('Google Fetch');
   
-  if (!silent) {
-    showLoading('Googleカレンダーから取得中...');
-  }
+  // ローディングオーバーレイは表示しない（バックグラウンド処理）
+  // ステータスインジケータのみ更新（取得中は同期中として扱う）
+  updateGoogleSyncIndicator('syncing');
 
   let response;
   try {
     const url = `${GOOGLE_APPS_SCRIPT_ENDPOINT}?action=events`;
     response = await fetch(url, { method: 'GET', mode: 'cors' });
   } catch (error) {
+    updateGoogleSyncIndicator('error');
     if (!silent) {
-      hideLoading();
       showMessage('Googleカレンダーの取得に失敗しました。ネットワークを確認してください。', 'error', 6000);
     }
     throw error;
@@ -1315,8 +1514,8 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
     const message = `Googleカレンダーからの取得に失敗しました (${response.status}) ${errorText || ''}`.trim();
+    updateGoogleSyncIndicator('error');
     if (!silent) {
-      hideLoading();
       showMessage(message, 'error', 6000);
     }
     throw new Error(message);
@@ -1327,8 +1526,8 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
     result = await response.json();
   } catch (error) {
     const message = 'Googleカレンダーの応答が不正です。';
+    updateGoogleSyncIndicator('error');
     if (!silent) {
-      hideLoading();
       showMessage(message, 'error', 6000);
     }
     throw error;
@@ -1336,15 +1535,18 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
 
   const googleEvents = Array.isArray(result?.events) ? result.events : [];
   const { created, updated, deleted } = await mergeGoogleEvents(googleEvents, rangeSet);
+  
+  // fetchGoogleCalendarEventsは取得のみなので、ステータスは次のsyncEventsToGoogleCalendarで更新される
+  // ここではsyncingのままにしておく（または未同期変更があればunsynced）
+  // 実際の同期状態はsyncEventsToGoogleCalendarの成功時に更新される
+  
   if (!silent) {
-    hideLoading();
     showMessage(
       `Googleカレンダーから取得: ${googleEvents.length}件 (新規:${created} / 更新:${updated} / 重複削除:${deleted})`,
       'success',
       6000
     );
   }
-  // silentモードではローディングを表示していないので、非表示にする必要はない
   return { created, updated, deleted: deleted || 0, total: googleEvents.length };
 }
 
@@ -1810,32 +2012,22 @@ async function addEvent(event, options = {}) {
       throw new Error('Firebase push failed: no key returned');
     }
 
-    // トランザクション的な同期処理：Google同期が成功した場合のみFirebaseに保存
+    // Firebaseに保存（Google同期はバックグラウンドで実行）
+    const { id: _omitId, ...payload } = newEvent;
+    await window.firebase.set(newEventRef, payload);
+    
+    // ローカル変更としてマーク（Google同期はバックグラウンドで実行される）
     if (syncGoogle && newEvent.isTimetable !== true) {
-      try {
-        // Google同期を先に実行
-        await mirrorMutationsToGoogle({
-          upserts: [{ ...newEvent, id: newId }],
-          silent: false,
-        });
-
-        // 同期成功時のみFirebaseに保存
-        const { id: _omitId, ...payload } = newEvent;
-        await window.firebase.set(newEventRef, payload);
-
-      } catch (error) {
-        isAddingEvent = false;
-        // 同期失敗時はFirebaseに保存せず、具体的なエラーメッセージを表示
-        const errorMessage = error.message?.includes('Google') ?
-          'Google Calendarとの同期に失敗しました。ネットワーク接続を確認してください。' :
-          'イベントの同期に失敗しました。再度お試しください。';
-        showMessage(errorMessage, 'error', 6000);
-        throw new Error('Google sync failed: event not saved');
-      }
-    } else {
-      // Google同期なしの場合は直接Firebaseに保存
-      const { id: _omitId, ...payload } = newEvent;
-      await window.firebase.set(newEventRef, payload);
+      hasUnsyncedGoogleChanges = true;
+      updateGoogleSyncIndicator('unsynced');
+      
+      // バックグラウンドでGoogle同期を実行（エラーは無視）
+      mirrorMutationsToGoogle({
+        upserts: [{ ...newEvent, id: newId }],
+        silent: true,
+      }).catch(() => {
+        // エラーは既にインジケータで表示される
+      });
     }
 
     // Firebase保存成功後、events配列の操作はリアルタイムリスナーに任せる
@@ -1917,17 +2109,18 @@ async function updateEvent(id, event, options = {}) {
     return false;
   }
 
+  // ローカル変更としてマーク（Google同期はバックグラウンドで実行される）
   if (syncGoogle && updatedEvent.isTimetable !== true) {
-    try {
-      // Google同期時は常にローディング画面を表示
-      await mirrorMutationsToGoogle({
-        upserts: [{ ...updatedEvent, id }],
-        silent: false,
-      });
-    } catch (error) {
-      // Google同期が失敗してもFirebaseの更新は成功しているので、エラーをスローしない
-      // ユーザーには通知しない（silent: falseの意図）
-    }
+    hasUnsyncedGoogleChanges = true;
+    updateGoogleSyncIndicator('unsynced');
+    
+    // バックグラウンドでGoogle同期を実行（エラーは無視）
+    mirrorMutationsToGoogle({
+      upserts: [{ ...updatedEvent, id }],
+      silent: true,
+    }).catch(() => {
+      // エラーは既にインジケータで表示される
+    });
   }
 
   return true;
@@ -1970,18 +2163,19 @@ async function deleteEvent(id, options = {}) {
     return false;
   }
 
+  // ローカル変更としてマーク（Google同期はバックグラウンドで実行される）
   if (syncGoogle && existingEvent?.isTimetable !== true) {
-    try {
-      // 削除時にイベント情報（日付とタイトル）も送信して、IDが一致しない場合でもマッチングできるようにする
-      // Google同期時は常にローディング画面を表示
-      await mirrorMutationsToGoogle({
-        deletes: existingEvent ? [existingEvent] : [id],
-        silent: false,
-      });
-    } catch (error) {
-      // Google同期が失敗してもFirebaseの削除は成功しているので、エラーをスローしない
-      // ユーザーには通知しない（silent: falseの意図）
-    }
+    hasUnsyncedGoogleChanges = true;
+    updateGoogleSyncIndicator('unsynced');
+    
+    // バックグラウンドでGoogle同期を実行（エラーは無視）
+    // 削除時にイベント情報（日付とタイトル）も送信して、IDが一致しない場合でもマッチングできるようにする
+    mirrorMutationsToGoogle({
+      deletes: existingEvent ? [existingEvent] : [id],
+      silent: true,
+    }).catch(() => {
+      // エラーは既にインジケータで表示される
+    });
   }
 
   return true;
@@ -2057,9 +2251,11 @@ function startAutomaticGoogleSync() {
     if (googleSyncInFlight) return;
     googleSyncInFlight = true;
     try {
-      await fetchGoogleCalendarEvents({ silent: false });
-      await syncEventsToGoogleCalendar({ silent: false });
+      // バックグラウンド同期として実行（ローディングオーバーレイは表示しない）
+      await fetchGoogleCalendarEvents({ silent: true });
+      await syncEventsToGoogleCalendar({ silent: true });
     } catch (error) {
+      // エラーは既にインジケータで表示される
     } finally {
       googleSyncInFlight = false;
     }
@@ -4188,8 +4384,8 @@ function getCombiCurrentSemesterId(semestersObj) {
     return null;
   }
   
-  const semesters = Object.values(semestersObj);
-  if (semesters.length === 0) {
+  const semesterEntries = Object.entries(semestersObj);
+  if (semesterEntries.length === 0) {
     return null;
   }
   
@@ -4199,14 +4395,15 @@ function getCombiCurrentSemesterId(semestersObj) {
     return savedId;
   }
   
-  // フォールバック: startDateが最新のものを選択
-  const sorted = semesters.slice().sort((a, b) => {
+  // フォールバック: startDateが最新のものを選択（Firebaseのキーを返す）
+  const sorted = semesterEntries.slice().sort(([, a], [, b]) => {
     const aDate = new Date(a.startDate || a.createdAt || 0).getTime();
     const bDate = new Date(b.startDate || b.createdAt || 0).getTime();
     return bDate - aDate; // 新しい順
   });
   
-  return sorted[0]?.id || null;
+  // Firebaseのキー（学期ID）を返す
+  return sorted[0]?.[0] || null;
 }
 
 // 学習管理アプリから学期データとタスクデータを読み込む
@@ -4220,10 +4417,9 @@ async function loadCombiData() {
     const semestersRef = window.firebase.ref(db, 'semesters');
     const tasksRef = window.firebase.ref(db, 'tabler/tasks');
     
-    const [semestersSnap, tasksSnap] = await Promise.all([
-      window.firebase.get(semestersRef),
-      window.firebase.get(tasksRef)
-    ]);
+    // 順次実行（安定性のため）
+    const semestersSnap = await window.firebase.get(semestersRef);
+    const tasksSnap = await window.firebase.get(tasksRef);
     
     const semestersData = semestersSnap.exists() ? semestersSnap.val() : {};
     const currentSemesterId = getCombiCurrentSemesterId(semestersData);
@@ -4239,6 +4435,9 @@ async function loadCombiData() {
           semesterTasks[taskId] = task;
         }
       });
+    } else {
+      // 学期IDが取得できない場合でも、すべてのタスクを読み込む（デバッグ用）
+      Object.assign(semesterTasks, allTasks);
     }
     
     return { semester, tasks: semesterTasks };
@@ -4258,10 +4457,12 @@ async function syncTimetableEvents() {
       const combiTimetableEvents = events.filter(e => 
         e && e.source === 'combi-timetable' && e.isTimetable === true
       );
-      // バッチ削除（並列実行）
-      await Promise.all(combiTimetableEvents.map(ev => 
-        ev && ev.id && isValidEventId(ev.id) ? deleteEvent(ev.id, { syncGoogle: false }) : Promise.resolve()
-      ));
+      // 順次削除（安定性のため）
+      for (const ev of combiTimetableEvents) {
+        if (ev && ev.id && isValidEventId(ev.id)) {
+          await deleteEvent(ev.id, { syncGoogle: false });
+        }
+      }
     }
     return 0;
   }
@@ -4272,9 +4473,12 @@ async function syncTimetableEvents() {
       const combiTimetableEvents = events.filter(e => 
         e && e.source === 'combi-timetable' && e.isTimetable === true
       );
-      await Promise.all(combiTimetableEvents.map(ev => 
-        ev && ev.id && isValidEventId(ev.id) ? deleteEvent(ev.id, { syncGoogle: false }) : Promise.resolve()
-      ));
+      // 順次削除（安定性のため）
+      for (const ev of combiTimetableEvents) {
+        if (ev && ev.id && isValidEventId(ev.id)) {
+          await deleteEvent(ev.id, { syncGoogle: false });
+        }
+      }
     }
     return 0;
   }
@@ -4348,13 +4552,13 @@ async function syncTimetableEvents() {
       }
     }
 
-    // 事前に検出した重複イベントを削除
+    // 事前に検出した重複イベントを削除（順次実行、安定性のため）
     if (duplicateEventsToDelete.length > 0) {
-      await Promise.all(
-        duplicateEventsToDelete.map(ev =>
-          ev && ev.id ? deleteEvent(ev.id, { syncGoogle: false }) : Promise.resolve()
-        )
-      );
+      for (const ev of duplicateEventsToDelete) {
+        if (ev && ev.id) {
+          await deleteEvent(ev.id, { syncGoogle: false });
+        }
+      }
     }
     
     // 新しいイベントのマップを作成
@@ -4457,27 +4661,30 @@ async function syncTimetableEvents() {
       }
     });
     
-    // バッチ削除（並列実行）
-    await Promise.all(eventsToDelete.map(ev => 
-      ev && ev.id ? deleteEvent(ev.id, { syncGoogle: false }) : Promise.resolve()
-    ));
+    // 順次削除（安定性のため）
+    for (const ev of eventsToDelete) {
+      if (ev && ev.id) {
+        await deleteEvent(ev.id, { syncGoogle: false });
+      }
+    }
     
-    // バッチ作成（並列実行、ただしFirebaseの負荷を考慮して少し制限）
+    // 順次作成（安定性のため）
     let createdCount = 0;
-    for (let i = 0; i < eventsToCreate.length; i += 10) {
-      const batch = eventsToCreate.slice(i, i + 10);
-      const results = await Promise.allSettled(
-        batch.map(event => {
-          // 重複チェック: 同じキーのイベントが既に作成されていないか確認
-          const checkKey = `${event.startTime}_${event.title}`;
-          const alreadyExists = existingEventsMap.has(checkKey);
-          if (alreadyExists) {
-            return Promise.resolve(null); // スキップ
-          }
-          return addEvent(event, { syncGoogle: false });
-        })
-      );
-      createdCount += results.filter(r => r.status === 'fulfilled' && r.value).length;
+    for (const event of eventsToCreate) {
+      // 重複チェック: 同じキーのイベントが既に作成されていないか確認
+      const checkKey = `${event.startTime}_${event.title}`;
+      const alreadyExists = existingEventsMap.has(checkKey);
+      if (alreadyExists) {
+        continue; // スキップ
+      }
+      try {
+        const result = await addEvent(event, { syncGoogle: false });
+        if (result) {
+          createdCount++;
+        }
+      } catch (error) {
+        // エラーは無視して続行
+      }
     }
     
     return createdCount;
@@ -4497,10 +4704,18 @@ async function syncTaskEvents() {
     // タスクデータがない場合は、既存のcombiタスクイベントをすべて削除
     if (isArray(events)) {
       const combiTaskEvents = events.filter(e => e && e.source === 'combi-task');
-      await Promise.all(combiTaskEvents.map(ev => 
-        ev && ev.id ? deleteEvent(ev.id, { syncGoogle: false }) : Promise.resolve()
-      ));
+      // 順次削除（安定性のため）
+      for (const ev of combiTaskEvents) {
+        if (ev && ev.id) {
+          await deleteEvent(ev.id, { syncGoogle: false });
+        }
+      }
     }
+    return 0;
+  }
+  
+  // タスクが空のオブジェクトの場合も早期リターン
+  if (Object.keys(tasks).length === 0) {
     return 0;
   }
 
@@ -4568,17 +4783,22 @@ async function syncTaskEvents() {
     const processedTaskIds = new Set();
     
     // 各タスクについて処理（未完了タスクのみ）
+    let processedCount = 0;
+    let skippedCount = 0;
     for (const [taskId, task] of Object.entries(tasks)) {
     if (!task || typeof task !== 'object') {
+      skippedCount++;
       continue;
     }
 
     // 完了タスクは表示しない（既存イベントがあれば削除対象）
-    if (task.completed) {
+    // completedフィールドが存在し、かつtrueの場合のみ完了とみなす
+    if (task.completed === true) {
       const existingEvent = existingEventsMap.get(taskId);
       if (existingEvent && existingEvent.id) {
         eventsToDelete.add(existingEvent.id);
       }
+      skippedCount++;
       continue;
     }
     
@@ -4588,15 +4808,18 @@ async function syncTaskEvents() {
       if (existingEvent && existingEvent.id) {
         eventsToDelete.add(existingEvent.id);
       }
+      skippedCount++;
       continue;
     }
     
     // 期限日の形式を確認（YYYY-MM-DD）
     if (!/^\d{4}-\d{2}-\d{2}$/.test(task.dueDate)) {
+      skippedCount++;
       continue;
     }
     
     processedTaskIds.add(taskId);
+    processedCount++;
     
     // タスクタイプと内容・タイトルを取得
     const taskType = task.taskType || '課題';
@@ -4604,8 +4827,9 @@ async function syncTaskEvents() {
     const baseTitle = typeof task.title === 'string' ? task.title.trim() : '';
     
     // カレンダー上のタイトルは「科目：種別」の形式で表示
+    // タイトルがない場合は、内容またはタスクタイプを使用
     const subjectLabel = baseTitle || (content.trim() || taskType);
-    const calendarTitle = `${subjectLabel}：${taskType}`;
+    const calendarTitle = baseTitle ? `${subjectLabel}：${taskType}` : taskType;
     
     // 終日イベントとして作成（期限日の00:00:00から23:59:59まで）
     const startTime = `${task.dueDate}T00:00:00`;
@@ -4681,29 +4905,84 @@ async function syncTaskEvents() {
       }
     });
     
-    // バッチ削除（並列実行）
-    await Promise.all(Array.from(eventsToDelete).map(id => 
-      id ? deleteEvent(id, { syncGoogle: false }) : Promise.resolve()
-    ));
+    // 順次削除（安定性のため）
+    for (const id of Array.from(eventsToDelete)) {
+      if (id) {
+        await deleteEvent(id, { syncGoogle: false });
+      }
+    }
     
-    // バッチ作成（並列実行、ただしFirebaseの負荷を考慮して少し制限）
+    // 順次作成（安定性のため）
     let createdCount = 0;
-    for (let i = 0; i < eventsToCreate.length; i += 10) {
-      const batch = eventsToCreate.slice(i, i + 10);
-      const results = await Promise.allSettled(
-        batch.map(event => {
-          // 重複チェック: 同じタスクIDのイベントが既に作成されていないか確認
-          const taskIdMatch = event.description && event.description.match(/タスクID:\s*([^\n]+)/);
-          if (taskIdMatch && taskIdMatch[1]) {
-            const taskId = taskIdMatch[1].trim();
-            if (existingEventsMap.has(taskId)) {
-              return Promise.resolve(null); // スキップ
-            }
+    for (const event of eventsToCreate) {
+      // 重複チェック: 同じタスクIDのイベントが既に作成されていないか確認
+      const taskIdMatch = event.description && event.description.match(/タスクID:\s*([^\n]+)/);
+      if (taskIdMatch && taskIdMatch[1]) {
+        const taskId = taskIdMatch[1].trim();
+        if (existingEventsMap.has(taskId)) {
+          continue; // スキップ
+        }
+      }
+      try {
+        const result = await addEvent(event, { syncGoogle: false });
+        if (result) {
+          createdCount++;
+        }
+      } catch (error) {
+        // エラーは無視して続行
+      }
+    }
+    
+    // イベント作成後、Firebaseから直接Combiタスクイベントを読み込んでevents配列に追加
+    // （リアルタイムリスナーが無視されているため、手動で追加する必要がある）
+    // 常に実行（createdCountが0でも、既存イベントの更新が必要な場合があるため）
+    // Firebaseの書き込みが完了するのを待つ
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Firebaseから直接Combiタスクイベントを読み込む
+    if (isFirebaseEnabled && window.firebase?.db) {
+      try {
+        const eventsRef = window.firebase.ref(window.firebase.db, "events");
+        const snapshot = await window.firebase.get(eventsRef);
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data && typeof data === 'object' && !Array.isArray(data)) {
+            const allowedRanges = getAllowedDateRanges();
+            Object.keys(data).forEach(key => {
+              const ev = data[key];
+              if (ev && ev.source === 'combi-task') {
+                const normalizedEvent = normalizeEventFromSnapshot({ val: () => ev }, key);
+                // 既存のイベントをチェック（重複防止）
+                const existingIndex = events.findIndex(e => e.id === key);
+                if (existingIndex === -1) {
+                  // 日付範囲内のイベントのみ追加
+                  if (isEventInAllowedRange(normalizedEvent, allowedRanges)) {
+                    events.push(normalizedEvent);
+                  }
+                } else {
+                  // 既存イベントを更新
+                  events[existingIndex] = normalizedEvent;
+                }
+              }
+            });
+            // events配列をソート
+            events.sort((a, b) => {
+              const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+              const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+              if (Number.isNaN(aTime)) return 1;
+              if (Number.isNaN(bTime)) return -1;
+              return aTime - bTime;
+            });
           }
-          return addEvent(event, { syncGoogle: false });
-        })
-      );
-      createdCount += results.filter(r => r.status === 'fulfilled' && r.value).length;
+        }
+      } catch (error) {
+        // エラーは無視（フォールバックとしてリアルタイムリスナーに任せる）
+      }
+    }
+    
+    // ビューを更新（イベントが追加/更新された場合）
+    if (createdCount > 0 || eventsToDelete.size > 0) {
+      updateViews({ useLoadingOverlay: false });
     }
     
     return createdCount;
@@ -4718,7 +4997,8 @@ async function syncTaskEvents() {
 // 学習管理アプリ（combi）の自動同期を設定
 // 初回同期関数を返す（初期化時に呼び出す）
 function setupCombiAutoSync() {
-  if (!isFirebaseEnabled || !window.firebase?.db) {
+  // Firebaseが有効でない場合でも、初回同期関数を返す（loadCombiData内でチェックする）
+  if (!window.firebase?.db) {
     return null; // 初回同期関数を返さない
   }
   
@@ -4746,14 +5026,25 @@ function setupCombiAutoSync() {
     }
     
     try {
-      // 時間割イベントとタスクイベントを並列同期
+      // 時間割イベントとタスクイベントを順次同期（安定性のため）
       if (isInitial) {
       }
       
-      const [timetableResult, taskResult] = await Promise.allSettled([
-        syncTimetableEvents(),
-        syncTaskEvents()
-      ]);
+      // 順次実行（安定性のため）
+      let timetableResult = { status: 'fulfilled', value: 0 };
+      let taskResult = { status: 'fulfilled', value: 0 };
+      
+      try {
+        timetableResult.value = await syncTimetableEvents();
+      } catch (error) {
+        timetableResult = { status: 'rejected', reason: error };
+      }
+      
+      try {
+        taskResult.value = await syncTaskEvents();
+      } catch (error) {
+        taskResult = { status: 'rejected', reason: error };
+      }
       
       if (isInitial) {
         if (timetableResult.status === 'fulfilled') {
@@ -4832,6 +5123,15 @@ function addMonths(date, months) {
 
 // ビュー切り替え
 function switchView(view) {
+  // ビューを保存
+  if (view === 'day' || view === 'week' || view === 'month') {
+    try {
+      localStorage.setItem('scheduleView', view);
+    } catch (error) {
+      // localStorageが使用できない場合は無視
+    }
+  }
+  
   // すべてのビューを非アクティブに
   const dayView = safeGetElementById('dayView');
   const weekView = safeGetElementById('weekView');
@@ -4992,6 +5292,35 @@ document.addEventListener('DOMContentLoaded', async function() {
   enableDayGridClickToCreate();
   enableWeekGridClickToCreate();
   
+  // Google同期ステータスインジケータを初期化（未同期状態で開始）
+  updateGoogleSyncIndicator('unsynced');
+  
+  // インジケータにホバー/クリックイベントを追加
+  const indicator = safeGetElementById('googleSyncIndicator');
+  if (indicator) {
+    indicator.addEventListener('mouseenter', showGoogleSyncStatusTooltip);
+    indicator.addEventListener('mouseleave', hideGoogleSyncStatusTooltip);
+    indicator.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showGoogleSyncStatusTooltip(e);
+      // クリック時は少し長めに表示
+      setTimeout(() => {
+        hideGoogleSyncStatusTooltip();
+      }, 3000);
+    });
+  }
+  
+  // 保存されたビューを復元
+  try {
+    const savedView = localStorage.getItem('scheduleView');
+    if (savedView === 'day' || savedView === 'week' || savedView === 'month') {
+      currentView = savedView;
+      switchView(savedView);
+    }
+  } catch (error) {
+    // localStorageが使用できない場合はデフォルト（day）のまま
+  }
+  
   // 空ビューを表示（ローディングオーバーレイなし）
   updateViews({ useLoadingOverlay: false });
 
@@ -4999,6 +5328,8 @@ document.addEventListener('DOMContentLoaded', async function() {
   startAutomaticGoogleSync();
 
   // 学習管理アプリ（combi）の自動同期を設定（初回同期関数を取得）
+  // Firebaseが準備できていることを確認
+  checkFirebase();
   const performInitialCombiSync = setupCombiAutoSync();
 
   // ===== フェーズ2/3: データ読み込み＋初期描画を一括実行 =====
@@ -5010,18 +5341,25 @@ document.addEventListener('DOMContentLoaded', async function() {
       // 1. メインのイベントを読み込み
       await loadEvents();
 
-      // 2. 食事データとCombi初回同期を並列実行
-      const [mealDataResult, combiSyncResult] = await Promise.allSettled([
-        (async () => {
-          await loadMealData();
-          integrateMealEvents();
-          return true;
-        })(),
-        performInitialCombiSync ? (async () => {
+      // 2. 食事データとCombi初回同期を順次実行（安定性のため）
+      let mealDataResult = { status: 'fulfilled', value: true };
+      let combiSyncResult = { status: 'fulfilled', value: false };
+      
+      try {
+        await loadMealData();
+        integrateMealEvents();
+      } catch (error) {
+        mealDataResult = { status: 'rejected', reason: error };
+      }
+      
+      if (performInitialCombiSync) {
+        try {
           await performInitialCombiSync();
-          return true;
-        })() : Promise.resolve(false)
-      ]);
+          combiSyncResult.value = true;
+        } catch (error) {
+          combiSyncResult = { status: 'rejected', reason: error };
+        }
+      }
 
       if (mealDataResult.status === 'rejected') {
       }
@@ -5770,37 +6108,128 @@ function openAllDayCreateModal(date) {
   if (descInput) descInput.value = '';
 }
 
-// 週次グリッドでのクリック作成（クリック位置の時間で1時間の予定をモーダルで作成）
+// 週次グリッドでのクリック／ドラッグ範囲選択作成
+// - 日次グリッドと同様にドラッグで時間範囲を選択して予定を追加
+// - クリックのみの場合は1時間の予定を作成
 function enableWeekGridClickToCreate() {
   const dayContainers = document.querySelectorAll('.week-day .day-events-container');
+
   dayContainers.forEach((container, dayIndex) => {
-    container.addEventListener('click', (e) => {
+    let isSelecting = false;
+    let selectionStart = null;
+    let selectionPreview = null;
+    let hasMoved = false;
+
+    container.addEventListener('mousedown', (e) => {
       // 既存イベントクリックは除外
       if (e.target.closest('.event-item')) return;
-      
+      // リサイズハンドルクリックは除外
+      if (e.target.classList.contains('resize-handle')) return;
+
+      e.preventDefault();
+      isSelecting = true;
+      hasMoved = false;
+      container.classList.add('selecting');
+
       const rect = container.getBoundingClientRect();
       const offsetY = e.clientY - rect.top + container.scrollTop;
-      
-      // 15分単位に丸める
+      selectionStart = offsetY;
+
+      // 選択プレビュー要素を作成
+      selectionPreview = document.createElement('div');
+      selectionPreview.className = 'selection-preview';
+      selectionPreview.style.top = `${offsetY}px`;
+      selectionPreview.style.height = '0px';
+      container.appendChild(selectionPreview);
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp, { once: true });
+    });
+
+    function onMouseMove(e) {
+      if (!isSelecting || !selectionPreview) return;
+
+      hasMoved = true;
+
+      const rect = container.getBoundingClientRect();
+      const offsetY = e.clientY - rect.top + container.scrollTop;
+
+      const startY = Math.min(selectionStart, offsetY);
+      const endY = Math.max(selectionStart, offsetY);
+
+      selectionPreview.style.top = `${startY}px`;
+      selectionPreview.style.height = `${endY - startY}px`;
+    }
+
+    function onMouseUp(e) {
+      if (!isSelecting || !selectionPreview) return;
+
+      isSelecting = false;
+      container.classList.remove('selecting');
+
+      const rect = container.getBoundingClientRect();
+      const offsetY = e.clientY - rect.top + container.scrollTop;
+
+      const startY = Math.min(selectionStart, offsetY);
+      const endY = Math.max(selectionStart, offsetY);
+
+      // 選択プレビューを削除
+      if (selectionPreview && selectionPreview.parentNode) {
+        selectionPreview.remove();
+      }
+      document.removeEventListener('mousemove', onMouseMove);
+      selectionPreview = null;
+
+      // 15分単位に丸める（高さ→分への変換は日次と同様）
       const hourHeight = getHourHeight();
-      const minutesFromTop = Math.max(0, Math.round(offsetY / hourHeight * 60 / 15) * 15);
-      const totalStartMinutes = VISIBLE_START_HOUR * 60 + minutesFromTop;
-      const totalEndMinutes = Math.min(totalStartMinutes + 60, (VISIBLE_END_HOUR + 1) * 60);
+      const quarterHourHeight = hourHeight / 4; // 15分の高さ
+      const minutesFromTopStart = Math.max(0, Math.round(startY / hourHeight * 60 / 15) * 15);
+      const minutesFromTopEnd = Math.max(0, Math.round(endY / hourHeight * 60 / 15) * 15);
+
       const referenceWeekStart = getWeekStart(currentDate);
       const clickedDate = new Date(referenceWeekStart);
       clickedDate.setDate(referenceWeekStart.getDate() + dayIndex);
       clickedDate.setHours(0, 0, 0, 0);
 
-      const start = new Date(clickedDate.getTime() + totalStartMinutes * 60000);
-      const end = new Date(clickedDate.getTime() + totalEndMinutes * 60000);
-      
-      // モーダルを開く（既定値セット）
-      showEventModal();
-      const startTimeInput = safeGetElementById('eventStartTime');
-      const endTimeInput = safeGetElementById('eventEndTime');
-      if (startTimeInput) startTimeInput.value = formatDateTimeLocal(start);
-      if (endTimeInput) endTimeInput.value = formatDateTimeLocal(end);
-    });
+      const startTotalMinutes = VISIBLE_START_HOUR * 60 + minutesFromTopStart;
+      const endTotalMinutesRaw = VISIBLE_START_HOUR * 60 + minutesFromTopEnd;
+
+      const start = new Date(clickedDate.getTime() + startTotalMinutes * 60000);
+
+      // クリック（ドラッグなし）の場合は1時間の予定を作成
+      let end;
+      if (!hasMoved || (endY - startY) < quarterHourHeight) {
+        const oneHourEndMinutes = Math.min(startTotalMinutes + 60, (VISIBLE_END_HOUR + 1) * 60);
+        end = new Date(clickedDate.getTime() + oneHourEndMinutes * 60000);
+      } else {
+        const clampedEndTotalMinutes = Math.max(startTotalMinutes + 15, Math.min(endTotalMinutesRaw, (VISIBLE_END_HOUR + 1) * 60));
+        end = new Date(clickedDate.getTime() + clampedEndTotalMinutes * 60000);
+      }
+
+      // 一時的なイベントを作成して表示（ローカルのみ）
+      const tempEvent = {
+        id: 'temp-' + Date.now(),
+        title: '',
+        description: '',
+        startTime: formatDateTimeLocal(start),
+        endTime: formatDateTimeLocal(end),
+        color: '#3b82f6',
+        createdAt: new Date().toISOString(),
+        isTemporary: true
+      };
+
+      if (!Array.isArray(events)) {
+        return;
+      }
+
+      events.push(tempEvent);
+
+      // ビューを更新（一時的なイベントを表示）
+      updateViews({ useLoadingOverlay: false });
+
+      // モーダルを既定値付きで開く
+      showEventModal(tempEvent.id);
+    }
   });
 }
 

@@ -171,6 +171,56 @@ body {
   gap: clamp(0.25rem, 0.8vw, 0.3125rem);
 }
 
+/* Google同期ステータスインジケータ */
+.google-sync-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background-color 0.3s ease;
+  cursor: pointer;
+  margin-right: 0.5rem;
+  align-self: center;
+  position: relative;
+}
+
+.google-sync-indicator.status-synced {
+  background-color: #22c55e; /* 緑 */
+}
+
+.google-sync-indicator.status-syncing {
+  background-color: #eab308; /* 黄 */
+}
+
+.google-sync-indicator.status-error,
+.google-sync-indicator.status-unsynced {
+  background-color: #ef4444; /* 赤 */
+}
+
+/* Google同期ステータスツールチップ */
+.google-sync-tooltip {
+  position: fixed;
+  background-color: rgba(0, 0, 0, 0.85);
+  color: white;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%) translateY(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  max-width: 250px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.google-sync-tooltip.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .view-btn {
   background-color: var(--bg-primary);
   border: 1px solid var(--border-color);
