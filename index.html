@@ -11,24 +11,6 @@
     <meta name="apple-mobile-web-app-title" content="スケジュール">
     <meta name="application-name" content="スケジュール管理アプリ">
 
-    <!-- Web App Manifest -->
-    <link rel="manifest" href="site.webmanifest">
-
-    <!-- Theme Color -->
-    <meta name="theme-color" content="#3b82f6">
-    <meta name="msapplication-TileColor" content="#3b82f6">
-
-    <!-- iOS Splash Screens (Startup Images) -->
-    <link rel="apple-touch-startup-image" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='1136' viewBox='0 0 640 1136' fill='none'%3E%3Crect width='640' height='1136' fill='%23ffffff'/%3E%3Ctext x='320' y='568' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
-    <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='750' height='1334' viewBox='0 0 750 1334' fill='none'%3E%3Crect width='750' height='1334' fill='%23ffffff'/%3E%3Ctext x='375' y='667' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
-    <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1125' height='2436' viewBox='0 0 1125 2436' fill='none'%3E%3Crect width='1125' height='2436' fill='%23ffffff'/%3E%3Ctext x='562.5' y='1218' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
-    <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='828' height='1792' viewBox='0 0 828 1792' fill='none'%3E%3Crect width='828' height='1792' fill='%23ffffff'/%3E%3Ctext x='414' y='896' text-anchor='middle' fill='%233b82f6' font-family='Arial, sans-serif' font-size='24'%3Eスケジュール管理アプリ%3C/text%3E%3C/svg%3E">
-    <link rel="icon" type="image/png" sizes="32x32" href="icon-192.png">
-    <!-- iOS App Icons -->
-    <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
-    <link rel="apple-touch-icon" sizes="152x152" href="icon-180.png">
-    <link rel="apple-touch-icon" sizes="120x120" href="icon-180.png">
-    <link rel="apple-touch-icon" sizes="76x76" href="icon-180.png">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -66,19 +48,6 @@
         const db = getDatabase(app);
 
         window.firebase = { app, analytics, db, ref, set, onValue, onChildAdded, onChildChanged, onChildRemoved, push, update, remove, get };
-
-        // Register Service Worker for PWA
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js', { scope: './' })
-                    .then((registration) => {
-                        console.log('Service Worker registered successfully:', registration.scope);
-                    })
-                    .catch((error) => {
-                        console.log('Service Worker registration failed:', error);
-                    });
-            });
-        }
 
         // Mobile Zoom Prevention
         (function() {
@@ -444,7 +413,15 @@
         </div>
     </div>
 
+    <script>
+        // app.js読み込み前のログ
+        console.log('[INDEX.HTML] app.js読み込み前', new Date().toISOString());
+    </script>
     <script src="app.js"></script>
+    <script>
+        // app.js読み込み後のログ
+        console.log('[INDEX.HTML] app.js読み込み後', new Date().toISOString());
+    </script>
 </body>
 </html>
 
