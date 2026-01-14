@@ -1459,6 +1459,7 @@ body.modal-open {
     order: 1;
     width: 100%;
     justify-content: center;
+    position: relative;
   }
   
   .view-toggle {
@@ -1467,6 +1468,16 @@ body.modal-open {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
+    position: relative;
+  }
+  
+  /* スマホ版：丸をview-toggleの右上に配置 */
+  .view-toggle .google-sync-indicator {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    margin: 0;
+    z-index: 10;
   }
   
   .add-btn {
