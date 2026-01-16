@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, height=device-height">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>スケジュール管理アプリ</title>
 
     <!-- iOS App Configuration -->
@@ -133,7 +136,7 @@
                     <button id="todayBtn" class="today-btn">今日</button>
                 </div>
                 <div class="view-toggle">
-                    <div id="googleSyncIndicator" class="google-sync-indicator status-unsynced" title="Google同期: 未完了"></div>
+                    <div id="googleSyncIndicator" class="google-sync-indicator status-unsynced"></div>
                     <button id="dayViewBtn" class="view-btn active">日次</button>
                     <button id="weekViewBtn" class="view-btn">週次</button>
                     <button id="monthViewBtn" class="view-btn">月次</button>
@@ -415,14 +418,17 @@
     </div>
 
     <script>
-        // app.js読み込み前のログ
-        console.log('[INDEX.HTML] app.js読み込み前', new Date().toISOString());
+        
+        // Service Workerの登録解除（念のため）
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                for(let registration of registrations) {
+                    registration.unregister();
+                }
+            });
+        }
     </script>
     <script src="app.js"></script>
-    <script>
-        // app.js読み込み後のログ
-        console.log('[INDEX.HTML] app.js読み込み後', new Date().toISOString());
-    </script>
 </body>
 </html>
 
