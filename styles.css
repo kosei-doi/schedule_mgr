@@ -197,6 +197,59 @@ body {
   background-color: #ef4444; /* 赤 */
 }
 
+/* CRUD操作ステータスインジケータ */
+.crud-status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background-color 0.3s ease;
+  cursor: pointer;
+  margin-right: 0.5rem;
+  align-self: center;
+  position: relative;
+}
+
+.crud-status-indicator.status-idle {
+  background-color: transparent; /* 非表示 */
+}
+
+.crud-status-indicator.status-processing {
+  background-color: #eab308; /* 黄 */
+}
+
+.crud-status-indicator.status-success {
+  background-color: #22c55e; /* 緑 */
+}
+
+.crud-status-indicator.status-error {
+  background-color: #ef4444; /* 赤 */
+}
+
+/* CRUD操作ステータスツールチップ */
+.crud-status-tooltip {
+  position: fixed;
+  background-color: rgba(0, 0, 0, 0.85);
+  color: white;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%) translateY(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  max-width: 250px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.crud-status-tooltip.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 /* Google同期ステータスツールチップ */
 .google-sync-tooltip {
   position: fixed;
@@ -1476,6 +1529,14 @@ body.modal-open {
     position: absolute;
     top: -24px;
     right: -4px;
+    margin: 0;
+    z-index: 10;
+  }
+  
+  .view-toggle .crud-status-indicator {
+    position: absolute;
+    top: -24px;
+    right: 12px;
     margin: 0;
     z-index: 10;
   }

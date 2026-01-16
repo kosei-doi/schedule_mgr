@@ -54,6 +54,10 @@ let googleSyncStartTime = null; // 同期開始時刻（Dateオブジェクト�
 let googleSyncLastDuration = null; // 最後の同期にかかった時間（ミリ秒）
 let googleSyncTooltipTimerId = null; // ツールチップのリアルタイム更新用タイマーID
 const GOOGLE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+let crudStatus = 'idle'; // 'idle' | 'processing' | 'success' | 'error'
+let crudStatusStartTime = null; // CRUD操作開始時刻（Dateオブジェクト）
+let crudStatusLastDuration = null; // 最後のCRUD操作にかかった時間（ミリ秒）
+let crudStatusTooltipTimerId = null; // CRUDステータスツールチップのリアルタイム更新用タイマーID
 const VISIBLE_START_HOUR = 4;
 const VISIBLE_END_HOUR = 23;
 const HOUR_HEIGHT_PX = 25; // フォールバック値（実際の値は動的に取得）
@@ -331,6 +335,135 @@ function hideGoogleSyncStatusTooltip() {
   if (googleSyncTooltipTimerId) {
     clearInterval(googleSyncTooltipTimerId);
     googleSyncTooltipTimerId = null;
+  }
+}
+
+// CRUD操作ステータスインジケータを更新
+function updateCrudStatusIndicator(status) {
+  crudStatus = status;
+  
+  if (status === 'processing' && !crudStatusStartTime) {
+    crudStatusStartTime = new Date();
+  } else if (status !== 'processing' && crudStatusStartTime) {
+    crudStatusLastDuration = Date.now() - crudStatusStartTime.getTime();
+    crudStatusStartTime = null;
+  }
+  
+  const indicator = safeGetElementById('crudStatusIndicator');
+  if (!indicator) return;
+  
+  // すべてのステータスクラスを削除
+  indicator.classList.remove('status-idle', 'status-processing', 'status-success', 'status-error');
+  
+  // 新しいステータスクラスを追加
+  if (status === 'processing') {
+    indicator.classList.add('status-processing');
+  } else if (status === 'success') {
+    indicator.classList.add('status-success');
+    // 成功後、2秒後にidleに戻す
+    setTimeout(() => {
+      if (crudStatus === 'success') {
+        updateCrudStatusIndicator('idle');
+      }
+    }, 2000);
+  } else if (status === 'error') {
+    indicator.classList.add('status-error');
+    // エラー後、3秒後にidleに戻す
+    setTimeout(() => {
+      if (crudStatus === 'error') {
+        updateCrudStatusIndicator('idle');
+      }
+    }, 3000);
+  } else {
+    indicator.classList.add('status-idle');
+  }
+}
+
+// CRUD操作ステータスの詳細情報を取得
+function getCrudStatusInfo() {
+  let statusText = '';
+  switch (crudStatus) {
+    case 'processing':
+      statusText = '処理中';
+      break;
+    case 'success':
+      statusText = '完了';
+      break;
+    case 'error':
+      statusText = 'エラー';
+      break;
+    default:
+      statusText = '';
+  }
+  
+  let timeText = '';
+  if (crudStatus === 'processing' && crudStatusStartTime) {
+    const elapsed = Date.now() - crudStatusStartTime.getTime();
+    const seconds = (elapsed / 1000).toFixed(1);
+    timeText = `${seconds}秒`;
+  } else if (crudStatusLastDuration !== null) {
+    const seconds = (crudStatusLastDuration / 1000).toFixed(1);
+    timeText = `${seconds}秒`;
+  }
+  
+  return { status: statusText, time: timeText };
+}
+
+// CRUD操作ステータスツールチップを表示
+function showCrudStatusTooltip(event) {
+  // 既存のツールチップを削除（重複防止）
+  const existingTooltips = document.querySelectorAll('#crudStatusTooltip');
+  existingTooltips.forEach(el => el.remove());
+  
+  // 新しいツールチップを作成
+  const tooltip = document.createElement('div');
+  tooltip.id = 'crudStatusTooltip';
+  tooltip.className = 'crud-status-tooltip';
+  document.body.appendChild(tooltip);
+  
+  const indicator = safeGetElementById('crudStatusIndicator');
+  if (!indicator) return;
+  
+  const rect = indicator.getBoundingClientRect();
+  const info = getCrudStatusInfo();
+  
+  let tooltipText = info.status;
+  if (info.time) {
+    tooltipText += ' ' + info.time;
+  }
+  
+  tooltip.textContent = tooltipText;
+  tooltip.style.left = rect.left + rect.width / 2 + 'px';
+  tooltip.style.top = rect.bottom + 8 + 'px';
+  tooltip.classList.add('visible');
+  
+  // 処理中の場合、リアルタイムで経過時間を更新
+  if (crudStatus === 'processing') {
+    if (crudStatusTooltipTimerId) {
+      clearInterval(crudStatusTooltipTimerId);
+    }
+    crudStatusTooltipTimerId = setInterval(() => {
+      if (crudStatus === 'processing' && crudStatusStartTime) {
+        const elapsed = Date.now() - crudStatusStartTime.getTime();
+        const seconds = (elapsed / 1000).toFixed(1);
+        tooltip.textContent = info.status + ' ' + seconds + '秒';
+      } else {
+        clearInterval(crudStatusTooltipTimerId);
+        crudStatusTooltipTimerId = null;
+      }
+    }, 100);
+  }
+}
+
+// CRUD操作ステータスツールチップを非表示
+function hideCrudStatusTooltip() {
+  const tooltip = safeGetElementById('crudStatusTooltip');
+  if (tooltip) {
+    tooltip.classList.remove('visible');
+  }
+  if (crudStatusTooltipTimerId) {
+    clearInterval(crudStatusTooltipTimerId);
+    crudStatusTooltipTimerId = null;
   }
 }
 
@@ -1596,9 +1729,9 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
 
   try {
     if (!silent) {
-      showLoading('削除中...');
+      updateCrudStatusIndicator('processing');
     }
-    
+
     if (isFirebaseEnabled && window.firebase?.db) {
       const eventsRef = window.firebase.ref(window.firebase.db, 'events');
       await window.firebase.remove(eventsRef);
@@ -1617,13 +1750,13 @@ async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
     }
 
     if (!silent) {
-      hideLoading();
+      updateCrudStatusIndicator('success');
       showMessage('全ての予定を削除しました。', 'success');
     }
     return true;
   } catch (error) {
     if (!silent) {
-      hideLoading();
+      updateCrudStatusIndicator('error');
       showMessage('予定の削除に失敗しました。再度お試しください。', 'error', 6000);
     }
     return false;
@@ -2438,6 +2571,12 @@ function closeEventModal() {
     modal.setAttribute('aria-hidden', 'true');
     // bodyのoverflowを元に戻す（CSSクラスのみで制御）
     document.body.classList.remove('modal-open');
+  }
+  
+  // フォーム送信フラグをリセット（念のため）
+  const eventForm = safeGetElementById('eventForm');
+  if (eventForm) {
+    delete eventForm.dataset.submitting;
   }
   
   // 一時的イベントの場合は削除
@@ -3553,6 +3692,24 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
+  // CRUD操作ステータスインジケータを初期化（待機状態で開始）
+  updateCrudStatusIndicator('idle');
+  
+  // CRUDステータスインジケータにホバー/クリックイベントを追加（重複登録を防ぐ）
+  const crudIndicator = safeGetElementById('crudStatusIndicator');
+  if (crudIndicator && !crudIndicator.dataset.tooltipBound) {
+    crudIndicator.dataset.tooltipBound = 'true';
+    crudIndicator.addEventListener('mouseenter', showCrudStatusTooltip);
+    crudIndicator.addEventListener('mouseleave', hideCrudStatusTooltip);
+    crudIndicator.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showCrudStatusTooltip(e);
+      setTimeout(() => {
+        hideCrudStatusTooltip();
+      }, 3000);
+    });
+  }
+  
   // 保存されたビューを復元
   try {
     const savedView = localStorage.getItem('scheduleView');
@@ -3842,8 +3999,8 @@ function setupEventListeners() {
     eventForm.dataset.submitting = 'true';
     
     try {
-      showLoading('保存中...');
-      
+      updateCrudStatusIndicator('processing');
+
       const formData = new FormData(e.target);
       const isAllDay = formData.get('allDay') === 'on';
       
@@ -3890,16 +4047,18 @@ function setupEventListeners() {
       // バリデーション
       const errors = validateEvent(event);
       if (errors.length > 0) {
-        hideLoading();
+        updateCrudStatusIndicator('error');
         showMessage(errors.join(' / '), 'error', 6000);
+        delete eventForm.dataset.submitting;
         return;
       }
       
       if (editingEventId && typeof editingEventId === 'string' && editingEventId.startsWith('temp-')) {
         // 一時的イベントを正式なイベントに変換
         if (!Array.isArray(events)) {
-          hideLoading();
+          updateCrudStatusIndicator('error');
           showMessage('イベントの保存に失敗しました。', 'error', 6000);
+          delete eventForm.dataset.submitting;
           return;
         }
         const tempEventIndex = events.findIndex(e => e.id === editingEventId);
@@ -3925,7 +4084,10 @@ function setupEventListeners() {
         
         // Firebaseに保存（成功後にローカル配列を更新）
         const newId = await addEvent(newEvent);
-        if (newId && !isFirebaseEnabled) {
+        if (!newId) {
+          throw new Error('イベントの追加に失敗しました');
+        }
+        if (!isFirebaseEnabled) {
           // Firebaseが無効な場合のみローカル配列に追加
           newEvent.id = newId;
           events.push(newEvent);
@@ -3933,7 +4095,10 @@ function setupEventListeners() {
       } else if (editingEventId) {
         // 既存イベントを更新
         // Firebase更新を先に実行し、成功後にローカル配列を更新
-        await updateEvent(editingEventId, event);
+        const updateSuccess = await updateEvent(editingEventId, event);
+        if (!updateSuccess) {
+          throw new Error('イベントの更新に失敗しました');
+        }
         // ローカル配列も更新（Firebaseのリアルタイム更新で上書きされる可能性があるが、即座のUI更新のため）
         if (Array.isArray(events)) {
           const eventIndex = events.findIndex(e => e.id === editingEventId);
@@ -3956,18 +4121,21 @@ function setupEventListeners() {
       } else {
         // 新規イベントを作成
         const newId = await addEvent(event);
-        if (newId && !isFirebaseEnabled) {
+        if (!newId) {
+          throw new Error('イベントの追加に失敗しました');
+        }
+        if (!isFirebaseEnabled) {
           // Firebaseが無効な場合のみローカル配列に追加
           const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
           events.push(newEvent);
         }
       }
       
-      hideLoading();
+      updateCrudStatusIndicator('success');
       closeEventModal();
       showMessage(editingEventId ? '予定を更新しました' : '予定を追加しました', 'success', 3000);
     } catch (error) {
-      hideLoading();
+      updateCrudStatusIndicator('error');
       showMessage('イベントの保存に失敗しました。再度お試しください。', 'error', 6000);
     } finally {
       // Reset submission flag
@@ -3985,13 +4153,16 @@ function setupEventListeners() {
       const confirmed = await showConfirmModal('この予定を削除してもよろしいですか？', '削除の確認');
       if (confirmed) {
         try {
-          showLoading('削除中...');
-          await deleteEvent(editingEventId);
-          hideLoading();
+          updateCrudStatusIndicator('processing');
+          const deleteSuccess = await deleteEvent(editingEventId);
+          if (!deleteSuccess) {
+            throw new Error('イベントの削除に失敗しました');
+          }
+          updateCrudStatusIndicator('success');
           closeEventModal();
           showMessage('予定を削除しました', 'success', 3000);
         } catch (error) {
-          hideLoading();
+          updateCrudStatusIndicator('error');
           showMessage('イベントの削除に失敗しました。', 'error', 6000);
         }
       }
@@ -4442,7 +4613,7 @@ function attachResizeHandlers() {
       }
       
       try {
-        showLoading('予定を更新中...');
+        updateCrudStatusIndicator('processing');
         await updateEvent(id, {
           title: ev.title,
           description: ev.description || '',
@@ -4450,9 +4621,9 @@ function attachResizeHandlers() {
           endTime: newEndTime,
           color: ev.color
         });
-        hideLoading();
+        updateCrudStatusIndicator('success');
       } catch (error) {
-        hideLoading();
+        updateCrudStatusIndicator('error');
         showMessage('予定の更新に失敗しました。', 'error', 6000);
       }
     }
@@ -4512,7 +4683,7 @@ function attachResizeHandlers() {
       }
       
       try {
-        showLoading('予定を更新中...');
+        updateCrudStatusIndicator('processing');
         await updateEvent(id, {
           title: ev.title,
           description: ev.description || '',
@@ -4520,9 +4691,9 @@ function attachResizeHandlers() {
           endTime: newEndTime,
           color: ev.color
         });
-        hideLoading();
+        updateCrudStatusIndicator('success');
       } catch (error) {
-        hideLoading();
+        updateCrudStatusIndicator('error');
         showMessage('予定の更新に失敗しました。', 'error', 6000);
       }
     }
