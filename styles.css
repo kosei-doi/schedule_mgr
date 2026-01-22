@@ -1,23 +1,23 @@
-/* CSS変数定義 */
+/* CSS variable definitions */
 :root {
-  /* プライマリカラー */
+  /* Primary colors */
   --primary-color: #3b82f6;
   --primary-hover: #2563eb;
   
-  /* テキストカラー */
+  /* Text colors */
   --text-primary: #1f2937;
   --text-secondary: #6b7280;
   --text-light: #9ca3af;
   
-  /* 背景カラー */
+  /* Background colors */
   --bg-primary: #ffffff;
   --bg-secondary: #f9fafb;
   --bg-hover: #f3f4f6;
   
-  /* ボーダー */
+  /* Borders */
   --border-color: #e5e7eb;
   
-  /* イベントカラー */
+  /* Event colors */
   --event-blue: #3b82f6;
   --event-green: #10b981;
   --event-yellow: #f59e0b;
@@ -25,12 +25,12 @@
   --event-purple: #8b5cf6;
   --event-pink: #ec4899;
   
-  /* シャドウ */
+  /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
   
-  /* フォントサイズ */
+  /* Font sizes */
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-base: 1rem;
@@ -39,16 +39,16 @@
   --text-2xl: 1.5rem;
   --text-3xl: 1.875rem;
   
-  /* 時間スロットの高さ（柔軟に調整可能） */
-  /* 画面サイズに応じて連続的に自動調整: ビューポートの高さを基準に計算 */
-  /* 利用可能な画面の高さ（約80vh）を20個の時間スロットで分割 */
-  /* 最小0.875rem、推奨値は80vh / 20 = 4vh、最大2.5rem */
+  /* Time slot height (flexibly adjustable) */
+  /* Continuously auto-adjust based on screen size: calculated based on viewport height */
+  /* Divide available screen height (approx 80vh) into 20 time slots */
+  /* Minimum 0.875rem, recommended value 80vh / 20 = 4vh, maximum 2.5rem */
   --time-slot-height: clamp(0.875rem, 4vh, 2.5rem);
-  /* 20個の時間スロットの合計高さ（時間スロットコンテナとイベントコンテナの高さに使用） */
+  /* Total height of 20 time slots (used for time slot container and event container height) */
   --time-slots-total-height: calc(var(--time-slot-height) * 20);
 }
 
-/* リセット・ベーススタイル */
+/* Reset and base styles */
 * {
   margin: 0;
   padding: 0;
@@ -71,7 +71,7 @@ body {
   padding: 0;
 }
 
-/* アプリ全体 */
+/* App container */
 .app {
   height: 100dvh;
   min-height: 100dvh;
@@ -85,7 +85,7 @@ body {
   padding-top: env(safe-area-inset-top);
 }
 
-/* ヘッダー */
+/* Header */
 .header {
   background-color: var(--bg-primary);
   border-bottom: 1px solid var(--border-color);
@@ -118,10 +118,10 @@ body {
   border: 1px solid rgba(59, 130, 246, 0.25);
   border-radius: clamp(0.25rem, 0.5vw, 0.375rem);
   padding: clamp(0.4rem, 1vw, 0.5rem) clamp(0.6rem, 1.5vw, 0.75rem);
-  display: none !important; /* 通知は表示しない */
+  display: none !important; /* Notifications are not displayed */
 }
 
-/* 通知は表示しないため、.show, .error, .success のスタイルは不要 */
+/* Styles for .show, .error, .success are not needed since notifications are not displayed */
 
 .header-controls {
   display: flex;
@@ -171,7 +171,7 @@ body {
   gap: clamp(0.25rem, 0.8vw, 0.3125rem);
 }
 
-/* Google同期ステータスインジケータ */
+/* Google sync status indicator */
 .google-sync-indicator {
   width: 8px;
   height: 8px;
@@ -182,51 +182,75 @@ body {
   margin-right: 0.5rem;
   align-self: center;
   position: relative;
+  overflow: visible;
+}
+
+
+/* Pulsing animation for active states */
+@keyframes statusPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.2);
+  }
+}
+
+/* Subtle pulse for success state */
+@keyframes statusSuccessPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.1);
+  }
+}
+
+/* Error state subtle pulse */
+@keyframes statusErrorPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 
 .google-sync-indicator.status-synced {
-  background-color: #22c55e; /* 緑 */
+  background-color: #22c55e; /* Green */
+  animation: statusSuccessPulse 2s ease-in-out infinite;
 }
 
 .google-sync-indicator.status-syncing {
-  background-color: #eab308; /* 黄 */
+  background-color: #eab308; /* Yellow */
+  animation: statusPulse 1.5s ease-in-out infinite;
+  color: #eab308; /* Set color for the rotating dot */
 }
 
 .google-sync-indicator.status-error,
 .google-sync-indicator.status-unsynced {
-  background-color: #ef4444; /* 赤 */
+  background-color: #ef4444; /* Red */
+  animation: statusErrorPulse 2s ease-in-out infinite;
 }
 
-/* CRUD操作ステータスインジケータ */
-.crud-status-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  transition: background-color 0.3s ease;
-  cursor: pointer;
-  margin-right: 0.5rem;
-  align-self: center;
-  position: relative;
+/* Unified status indicator now uses google-sync-indicator classes */
+/* CRUD status classes are applied to google-sync-indicator when active */
+.google-sync-indicator.status-processing {
+  background-color: #eab308; /* Yellow - CRUD processing */
+  animation: statusPulse 1.5s ease-in-out infinite;
+  color: #eab308; /* Set color for the rotating dot */
 }
 
-.crud-status-indicator.status-idle {
-  background-color: transparent; /* 非表示 */
+.google-sync-indicator.status-success {
+  background-color: #22c55e; /* Green - CRUD success */
+  animation: statusSuccessPulse 2s ease-in-out infinite;
 }
 
-.crud-status-indicator.status-processing {
-  background-color: #eab308; /* 黄 */
-}
-
-.crud-status-indicator.status-success {
-  background-color: #22c55e; /* 緑 */
-}
-
-.crud-status-indicator.status-error {
-  background-color: #ef4444; /* 赤 */
-}
-
-/* CRUD操作ステータスツールチップ */
+/* CRUD operation status tooltip */
 .crud-status-tooltip {
   position: fixed;
   background-color: rgba(0, 0, 0, 0.85);
@@ -250,7 +274,7 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
-/* Google同期ステータスツールチップ */
+/* Google sync status tooltip */
 .google-sync-tooltip {
   position: fixed;
   background-color: rgba(0, 0, 0, 0.85);
@@ -321,7 +345,7 @@ body {
   outline-offset: 2px;
 }
 
-/* メインコンテンツ */
+/* Main content */
 .main-content {
   flex: 1;
   max-width: min(1200px, 95vw);
@@ -334,7 +358,7 @@ body {
   height: 100%;
 }
 
-/* ビューコンテナ */
+/* View container */
 .view-container {
   display: none;
   opacity: 0;
@@ -350,7 +374,7 @@ body {
   opacity: 1;
 }
 
-/* 日次ビュー */
+/* Day view */
 .day-all-day-row {
   display: grid;
   grid-template-columns: clamp(4rem, 10vw, 5rem) 1fr;
@@ -383,7 +407,7 @@ body {
   cursor: pointer;
 }
 
-/* 日次ビュー：時間スロットとイベントコンテナの配置 */
+/* Day view: Time slot and event container layout */
 .day-events {
   display: grid;
   grid-template-columns: clamp(4rem, 10vw, 5rem) 1fr;
@@ -397,7 +421,7 @@ body {
   height: 100%;
 }
 
-/* 時間スロットコンテナ：利用可能な高さを最大限に使用 */
+/* Time slot container: Maximize use of available height */
 .time-slots {
   background-color: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
@@ -409,7 +433,7 @@ body {
   box-sizing: border-box;
 }
 
-/* 時間スロット：柔軟な高さで時間軸を表示 */
+/* Time slot: Display time axis with flexible height */
 .time-slot {
   flex: 0 0 calc(100% / 20);
   display: flex;
@@ -428,7 +452,7 @@ body {
   border-bottom: none;
 }
 
-/* イベントコンテナ：利用可能な高さを最大限に使用 */
+/* Event container: Maximize use of available height */
 .event-container {
   position: relative;
   height: 100%;
@@ -436,11 +460,11 @@ body {
   overflow-x: hidden;
   box-sizing: border-box;
   scrollbar-width: thin;
-  /* スクロールバーの幅を考慮して背景位置を調整 */
+  /* Adjust background position considering scrollbar width */
   background-image: 
-    /* 1時間ごとの線（20個分） */
+    /* Hourly lines (20 total) */
     linear-gradient(to bottom, var(--border-color) 1px, transparent 1px),
-    /* 15分ごとの線 */
+    /* 15-minute interval lines */
     linear-gradient(to bottom, rgba(229, 231, 235, 0.5) 1px, transparent 1px);
   background-size: 100% calc(100% / 20), 100% calc(100% / 80);
   background-position: 0 0, 0 0;
@@ -464,7 +488,7 @@ body {
   min-width: 0;
 }
 
-/* リサイズハンドル */
+/* Resize handle */
 .event-item .resize-handle {
   position: absolute;
   left: 0;
@@ -512,7 +536,7 @@ body {
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: clip; /* JavaScriptで文字数を制限するため、clipを使用 */
+  text-overflow: clip; /* Use clip since JavaScript limits character count */
   min-width: 0;
   flex: 1;
 }
@@ -525,15 +549,16 @@ body {
   cursor: default;
 }
 
-/* ドラッグ中の視覚フィードバック */
+/* Visual feedback during drag */
 .event-item.dragging,
 .event-item.resizing {
   opacity: 0.85;
   box-shadow: var(--shadow-md);
 }
 
-/* 範囲選択中の視覚フィードバック */
-.event-container.selecting {
+/* Visual feedback during range selection */
+.event-container.selecting,
+.day-events-container.selecting {
   cursor: crosshair;
 }
 
@@ -585,12 +610,12 @@ body {
   margin-bottom: 2px;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip; /* Clip text instead of ellipsis to show more characters */
   min-width: 0;
   flex-shrink: 1;
 }
 
-/* モバイル版週次ビューではタイトルを改行して表示 */
+/* Display title with line breaks in mobile week view */
 .event-item.mobile-week .event-title {
   white-space: pre-line;
   overflow: visible;
@@ -602,7 +627,7 @@ body {
   opacity: 0.9;
 }
 
-/* イベント詳細パネル（モバイル版の週表示用） */
+/* Event detail panel (for mobile week display) */
 .event-detail-panel {
   position: absolute;
   left: clamp(2.5rem, 6vw, 3.125rem);
@@ -663,7 +688,7 @@ body {
   font-weight: 600;
 }
 
-/* 週次ビュー */
+/* Week view */
 .week-header {
   display: grid;
   grid-template-columns: clamp(2.5rem, 6vw, 3.125rem) 1fr;
@@ -745,10 +770,19 @@ body {
   flex-direction: column;
   gap: clamp(0.2rem, 0.5vw, 0.25rem);
   cursor: pointer;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow-y: hidden !important;
+  overflow-x: hidden !important;
+  scrollbar-width: none !important; /* Firefox */
+  -ms-overflow-style: none !important; /* IE and Edge */
   box-sizing: border-box;
   min-width: 0;
+}
+
+/* Hide scrollbar for all-day columns in webkit browsers */
+.week-all-day-columns .all-day-column::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 .week-all-day-columns .all-day-column .event-item {
@@ -801,6 +835,7 @@ body {
   background-color: var(--border-color);
   min-width: 0;
   width: 100%;
+  overflow: hidden;
 }
 
 .week-day {
@@ -811,6 +846,7 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .week-day:last-child {
@@ -821,12 +857,14 @@ body {
   position: relative;
   height: 100%;
   overflow-y: auto;
+  /* Ensure selection preview is positioned correctly */
+  overflow-x: hidden;
   overflow-x: hidden;
   min-width: 0;
   background-image: 
-    /* 1時間ごとの線（20個分） */
+    /* Hourly lines (20 total) */
     linear-gradient(to bottom, var(--border-color) 1px, transparent 1px),
-    /* 15分ごとの線 */
+    /* 15-minute interval lines */
     linear-gradient(to bottom, rgba(229, 231, 235, 0.5) 1px, transparent 1px);
   background-size: 100% calc(100% / 20), 100% calc(100% / 80);
   background-position: 0 0, 0 0;
@@ -837,12 +875,23 @@ body {
   display: none !important;
 }
 
-/* 週次：クリック操作のヒント */
+/* Week view: Click operation hint */
 .week-day .day-events-container {
   cursor: pointer;
+  overflow-y: hidden !important;
+  overflow-x: hidden !important;
+  scrollbar-width: none !important; /* Firefox */
+  -ms-overflow-style: none !important; /* IE and Edge */
 }
 
-/* 月次ビュー */
+/* Hide scrollbar for webkit browsers (Chrome, Safari) */
+.week-day .day-events-container::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Month view */
 .month-calendar {
   background-color: var(--bg-primary);
   border-radius: clamp(0.4rem, 1vw, 0.5rem);
@@ -958,7 +1007,7 @@ body {
   font-size: clamp(0.5rem, 1.2vw, 0.625rem);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip; /* Clip text instead of ellipsis to show more characters */
   cursor: pointer;
   transition: all 0.2s ease;
   display: flex;
@@ -969,7 +1018,7 @@ body {
   max-height: clamp(1rem, 2.5vw, 1.125rem);
   width: 100%;
   box-sizing: border-box;
-  /* デフォルトの背景色（+N表示用） */
+  /* Default background color (for +N display) */
   background-color: rgba(107, 114, 128, 0.15);
   color: var(--text-primary);
 }
@@ -1002,7 +1051,7 @@ body {
   outline-offset: 1px;
 }
 
-/* モーダル */
+/* Modal */
 .modal {
   display: none;
   position: fixed;
@@ -1022,7 +1071,7 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-/* モーダル表示時はbodyのスクロールを無効化 */
+/* Disable body scroll when modal is displayed */
 body.modal-open {
   overflow: hidden;
   position: fixed;
@@ -1098,7 +1147,7 @@ body.modal-open {
   outline-offset: 2px;
 }
 
-/* フォーム */
+/* Form */
 .event-form {
   padding: 16px 20px;
   overflow-y: auto;
@@ -1263,7 +1312,7 @@ body.modal-open {
   cursor: not-allowed;
 }
 
-/* カラーピッカー */
+/* Color picker */
 .color-picker {
   display: flex;
   gap: 8px;
@@ -1329,7 +1378,7 @@ body.modal-open {
   outline-offset: 3px;
 }
 
-/* フォームアクション */
+/* Form actions */
 .form-actions {
   display: flex;
   gap: 10px;
@@ -1422,7 +1471,7 @@ body.modal-open {
     box-shadow: 0 2px 4px rgba(239, 68, 68, 0.3);
   }
 
-/* 確認モーダル */
+/* Confirmation modal */
 .confirm-modal-content {
   max-width: 400px;
 }
@@ -1453,7 +1502,7 @@ body.modal-open {
   min-width: clamp(4rem, 10vw, 5rem);
 }
 
-/* ローディングオーバーレイ */
+/* Loading overlay */
 .loading-overlay {
   position: fixed;
   top: 0;
@@ -1497,7 +1546,7 @@ body.modal-open {
   margin: 0;
 }
 
-/* レスポンシブデザイン */
+/* Responsive design */
 @media (max-width: 768px) {
   .header {
     padding: 15px;
@@ -1524,19 +1573,11 @@ body.modal-open {
     position: relative;
   }
   
-  /* スマホ版：丸をview-toggleの右上に配置 */
+  /* Mobile: Position unified circle at top-right of view-toggle */
   .view-toggle .google-sync-indicator {
     position: absolute;
     top: -24px;
     right: -4px;
-    margin: 0;
-    z-index: 10;
-  }
-  
-  .view-toggle .crud-status-indicator {
-    position: absolute;
-    top: -24px;
-    right: 12px;
     margin: 0;
     z-index: 10;
   }
@@ -1549,6 +1590,11 @@ body.modal-open {
   .current-date {
     min-width: 150px;
     font-size: var(--text-base);
+  }
+  
+  /* Hide time in month view on mobile - show only title */
+  .month-event-time {
+    display: none !important;
   }
   
   .main-content {
@@ -1564,7 +1610,7 @@ body.modal-open {
     overflow-x: auto;
   }
   
-  /* モバイル版でも時間スロットの高さはCSS変数を使用（柔軟に調整） */
+  /* Mobile version also uses CSS variables for time slot height (flexible adjustment) */
   .time-slot {
     font-size: clamp(0.5rem, 2vw, 0.625rem);
   }
@@ -1752,7 +1798,7 @@ body.modal-open {
   }
 }
 
-/* アニメーション */
+/* Animation */
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -1782,7 +1828,7 @@ body.modal-open {
   animation: fadeIn 0.25s ease, softHighlight 0.8s ease;
 }
 
-/* スクロールバー */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -1801,7 +1847,7 @@ body.modal-open {
   background: var(--text-light);
 }
 
-/* ローディング状態（将来の拡張用） */
+/* Loading state (for future expansion) */
 .loading {
   display: flex;
   justify-content: center;
@@ -1810,7 +1856,7 @@ body.modal-open {
   color: var(--text-secondary);
 }
 
-/* エラー表示（将来の拡張用） */
+/* Error display (for future expansion) */
 .error-message {
   background-color: #fee2e2;
   border: 1px solid #ef4444;
@@ -1821,7 +1867,7 @@ body.modal-open {
   font-size: var(--text-sm);
 }
 
-/* 成功メッセージ（将来の拡張用） */
+/* Success message (for future expansion) */
 .success-message {
   background-color: #d1fae5;
   border: 1px solid #10b981;
