@@ -56,6 +56,7 @@ const GOOGLE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 let crudStatus = 'idle'; // 'idle' | 'processing' | 'success' | 'error'
 let crudStatusStartTime = null; // CRUD operation start time (Date object)
 let crudStatusLastDuration = null; // Last CRUD operation duration (milliseconds)
+let currentTimeIndicatorIntervalId = null; // Interval ID for updating current time indicator
 const VISIBLE_START_HOUR = 4;
 const VISIBLE_END_HOUR = 23;
 const HOUR_HEIGHT_PX = 25; // Fallback value (actual value is obtained dynamically)
@@ -2085,6 +2086,7 @@ function renderDayView() {
   });
 
   attachResizeHandlers();
+  updateCurrentTimeIndicator();
 }
 
 // Render week view
@@ -2162,6 +2164,7 @@ function renderWeekView() {
   
   // Attach resize handlers
   attachResizeHandlers();
+  updateCurrentTimeIndicator();
 }
 
 // Event overlap detection and grouping (for side-by-side equal division display of same time slot)
@@ -2884,6 +2887,138 @@ function createMonthDayElement(date, currentMonth) {
   return div;
 }
 
+// Update current time indicator for day and week views
+function updateCurrentTimeIndicator() {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinutes = now.getMinutes();
+  
+  // Only show indicator if current time is within visible range
+  if (currentHour < VISIBLE_START_HOUR || currentHour > VISIBLE_END_HOUR) {
+    // Remove indicators if outside visible range
+    removeCurrentTimeIndicators();
+    return;
+  }
+  
+  if (currentView === 'day') {
+    updateDayViewCurrentTime(now, currentHour, currentMinutes);
+  } else if (currentView === 'week') {
+    updateWeekViewCurrentTime(now, currentHour, currentMinutes);
+  }
+  // Month view uses CSS class 'today' which is already handled in renderMonthView
+}
+
+function updateDayViewCurrentTime(now, currentHour, currentMinutes) {
+  const container = safeGetElementById('dayEventContainer');
+  if (!container) return;
+  
+  // Check if we're viewing today
+  const today = new Date();
+  if (currentDate.toDateString() !== today.toDateString()) {
+    removeCurrentTimeIndicator(container);
+    return;
+  }
+  
+  const hourHeight = getHourHeight();
+  const currentTotalMinutes = currentHour * 60 + currentMinutes;
+  const visibleStartMinutes = VISIBLE_START_HOUR * 60;
+  const minutesFromTop = currentTotalMinutes - visibleStartMinutes;
+  const topPosition = (minutesFromTop / 60) * hourHeight;
+  
+  let indicator = container.querySelector('.current-time-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.className = 'current-time-indicator';
+    container.appendChild(indicator);
+  }
+  
+  indicator.style.top = `${topPosition}px`;
+  indicator.style.display = 'block';
+}
+
+function updateWeekViewCurrentTime(now, currentHour, currentMinutes) {
+  const weekStart = getWeekStart(currentDate);
+  const today = new Date();
+  
+  // Find which day column corresponds to today
+  for (let i = 0; i < 7; i++) {
+    const dayDate = new Date(weekStart);
+    dayDate.setDate(weekStart.getDate() + i);
+    
+    const dayElement = document.querySelector(`#weekView .week-day[data-day="${i}"]`);
+    const eventsContainer = dayElement ? dayElement.querySelector('.day-events-container') : null;
+    
+    if (!eventsContainer) continue;
+    
+    // Check if this day is today
+    if (dayDate.toDateString() === today.toDateString()) {
+      const hourHeight = getHourHeight();
+      const currentTotalMinutes = currentHour * 60 + currentMinutes;
+      const visibleStartMinutes = VISIBLE_START_HOUR * 60;
+      const minutesFromTop = currentTotalMinutes - visibleStartMinutes;
+      const topPosition = (minutesFromTop / 60) * hourHeight;
+      
+      let indicator = eventsContainer.querySelector('.current-time-indicator');
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'current-time-indicator';
+        eventsContainer.appendChild(indicator);
+      }
+      
+      indicator.style.top = `${topPosition}px`;
+      indicator.style.display = 'block';
+    } else {
+      // Remove indicator from other days
+      removeCurrentTimeIndicator(eventsContainer);
+    }
+  }
+}
+
+function removeCurrentTimeIndicators() {
+  const dayContainer = safeGetElementById('dayEventContainer');
+  if (dayContainer) {
+    removeCurrentTimeIndicator(dayContainer);
+  }
+  
+  const weekDayContainers = document.querySelectorAll('#weekView .day-events-container');
+  weekDayContainers.forEach(container => {
+    removeCurrentTimeIndicator(container);
+  });
+}
+
+function removeCurrentTimeIndicator(container) {
+  if (!container) return;
+  const indicator = container.querySelector('.current-time-indicator');
+  if (indicator) {
+    indicator.style.display = 'none';
+  }
+}
+
+// Start interval to update current time indicator every minute
+function startCurrentTimeIndicator() {
+  // Clear existing interval if any
+  if (currentTimeIndicatorIntervalId) {
+    clearInterval(currentTimeIndicatorIntervalId);
+  }
+  
+  // Update immediately
+  updateCurrentTimeIndicator();
+  
+  // Update every minute
+  currentTimeIndicatorIntervalId = setInterval(() => {
+    updateCurrentTimeIndicator();
+  }, 60000); // 60 seconds
+}
+
+// Stop interval for current time indicator
+function stopCurrentTimeIndicator() {
+  if (currentTimeIndicatorIntervalId) {
+    clearInterval(currentTimeIndicatorIntervalId);
+    currentTimeIndicatorIntervalId = null;
+  }
+  removeCurrentTimeIndicators();
+}
+
 // Update views
 function updateViews() {
   updateDateDisplay();
@@ -2897,6 +3032,8 @@ function updateViews() {
   }
   // Reschedule proximity notifications on each view update
   scheduleAllNotifications();
+  // Update current time indicator after view render
+  updateCurrentTimeIndicator();
 }
 
 // Utility functions
@@ -3566,6 +3703,7 @@ document.addEventListener('DOMContentLoaded', function() {
   enableWeekGridClickToCreate();
   
   startAutomaticGoogleSync();
+  startCurrentTimeIndicator();
 });
 
 window.addEventListener('beforeunload', () => {
