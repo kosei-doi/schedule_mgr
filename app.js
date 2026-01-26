@@ -1511,9 +1511,9 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
           }
         }
         if (survivors.length > 0) {
-          eventsByDateTitle.set(key, survivors);
+          eventsByKey.set(key, survivors);
         } else {
-          eventsByDateTitle.delete(key);
+          eventsByKey.delete(key);
         }
       }
     }
