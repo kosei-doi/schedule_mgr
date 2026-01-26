@@ -992,22 +992,6 @@ body {
   font-weight: 600;
 }
 
-.month-day.has-events {
-  background-color: rgba(16, 185, 129, 0.1);
-}
-
-.month-day.has-timetable {
-  background-color: rgba(239, 68, 68, 0.12);
-}
-
-.month-day.has-timetable.other-month {
-  background-color: rgba(239, 68, 68, 0.08);
-}
-
-.month-day.has-timetable.today {
-  background-color: rgba(239, 68, 68, 0.18);
-}
-
 .month-day-number {
   font-size: var(--text-sm);
   font-weight: 500;

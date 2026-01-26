@@ -33,11 +33,11 @@ function doPost(e) {
     }
 
     const windowStart = new Date();
-    windowStart.setDate(1); // 今月1日
+    windowStart.setDate(1); // First day of current month
     windowStart.setHours(0, 0, 0, 0);
 
     const windowEnd = new Date(windowStart);
-    // 2か月後の月末 (今月 +2) の 23:59:59
+    // End of month 2 months later (current month + 2) at 23:59:59
     windowEnd.setMonth(windowEnd.getMonth() + 3, 0);
     windowEnd.setHours(23, 59, 59, 999);
 
@@ -61,11 +61,11 @@ function doPost(e) {
       const bodyDescription = sanitizeDescription(eventPayload?.description || '');
       const location = (eventPayload?.location || '').trim();
       const isAllDay = Boolean(eventPayload?.allDay);
-      const title = (eventPayload?.title || '').trim() || '無題の予定';
+      const title = (eventPayload?.title || '').trim() || 'Untitled Event';
       const reminderMinutes = getReminderMinutes(eventPayload?.reminderMinutes);
 
       const fullDescription = buildDescription(eventId, bodyDescription);
-      const eventEntry = existingMap.get(eventId);
+      const eventEntry = existingMap.scheduleIdMap.get(eventId);
 
       if (eventEntry) {
         applyUpdates(eventEntry, { title, start, end, location, fullDescription, isAllDay, reminderMinutes });
@@ -86,7 +86,7 @@ function doPost(e) {
 
     return buildResponse({
       success: true,
-      message: 'Googleカレンダーとの同期が完了しました。',
+      message: 'Synchronization with Google Calendar completed.',
       created,
       updated,
       skipped,
@@ -155,8 +155,31 @@ function processMutations(calendar, payload) {
   if (windowStart < minStart) windowStart = new Date(minStart);
   if (windowEnd > maxEnd) windowEnd = new Date(maxEnd);
 
+  // Fetch events with the tag (for upserts and tagged deletes)
   const existingEvents = calendar.getEvents(windowStart, windowEnd, { search: DESCRIPTION_TAG });
-  const existingMap = buildExistingMap(existingEvents);
+  let existingMap = buildExistingMap(existingEvents);
+  
+  // If any delete has googleEventId, also fetch ALL events (without tag filter) to ensure we can delete fetched-only events
+  const hasGoogleIdDeletes = deletes.some(item => 
+    item && typeof item === 'object' && item.googleEventId
+  );
+  if (hasGoogleIdDeletes) {
+    const allEvents = calendar.getEvents(windowStart, windowEnd);
+    // Merge all events into the map (this will add fetched-only events that don't have the tag)
+    const allEventsMap = buildExistingMap(allEvents);
+    // Merge googleIdMap (this is the important one for deletions)
+    for (const [googleId, event] of allEventsMap.googleIdMap.entries()) {
+      if (!existingMap.googleIdMap.has(googleId)) {
+        existingMap.googleIdMap.set(googleId, event);
+      }
+    }
+    // Also merge scheduleIdMap for completeness
+    for (const [scheduleId, event] of allEventsMap.scheduleIdMap.entries()) {
+      if (!existingMap.scheduleIdMap.has(scheduleId)) {
+        existingMap.scheduleIdMap.set(scheduleId, event);
+      }
+    }
+  }
 
   let created = 0;
   let updated = 0;
@@ -175,11 +198,11 @@ function processMutations(calendar, payload) {
     const bodyDescription = sanitizeDescription(eventPayload?.description || '');
     const location = (eventPayload?.location || '').trim();
     const isAllDay = Boolean(eventPayload?.allDay);
-    const title = (eventPayload?.title || '').trim() || '無題の予定';
+    const title = (eventPayload?.title || '').trim() || 'Untitled Event';
     const reminderMinutes = getReminderMinutes(eventPayload?.reminderMinutes);
     const fullDescription = buildDescription(eventId, bodyDescription);
 
-    const eventEntry = existingMap.get(eventId);
+    const eventEntry = existingMap.scheduleIdMap.get(eventId);
     if (eventEntry) {
       applyUpdates(eventEntry, { title, start, end, location, fullDescription, isAllDay, reminderMinutes });
       updated += 1;
@@ -203,13 +226,43 @@ function processMutations(calendar, payload) {
     let deleteTitle = null;
     let deleteStartDate = null;
     let isAllDay = false;
-    
-    // 削除アイテムが文字列（IDのみ）の場合
+
+    // When delete item has googleEventId (e.g. fetched-only events), delete by Google ID first
+    const googleEventId = (rawDeleteItem && typeof rawDeleteItem === 'object' && rawDeleteItem.googleEventId)
+      ? String(rawDeleteItem.googleEventId).trim()
+      : null;
+    const isAllDayDelete = (rawDeleteItem && typeof rawDeleteItem === 'object') ? Boolean(rawDeleteItem.allDay) : false;
+    if (googleEventId) {
+      // First try to find in the existing events map (faster and more reliable)
+      let eventToDelete = existingMap.googleIdMap.get(googleEventId);
+      if (eventToDelete) {
+        try {
+          eventToDelete.deleteEvent();
+          deleted += 1;
+          return;
+        } catch (e) {
+          // Fall through to CalendarApp.getEventById() as backup
+        }
+      }
+      // Fallback: try CalendarApp.getEventById() if not found in map
+      try {
+        const byId = CalendarApp.getEventById(googleEventId);
+        if (byId) {
+          byId.deleteEvent();
+          deleted += 1;
+          return;
+        }
+      } catch (e) {
+        // Event not in this calendar or invalid id; fall through to id/title+date matching
+      }
+    }
+
+    // When delete item is a string (ID only)
     if (typeof rawDeleteItem === 'string') {
       scheduleId = rawDeleteItem.trim();
     if (!scheduleId) return;
     }
-    // 削除アイテムがオブジェクト（ID + イベント情報）の場合
+    // When delete item is an object (ID + event information)
     else if (rawDeleteItem && typeof rawDeleteItem === 'object') {
       scheduleId = (rawDeleteItem.id || '').trim();
       deleteTitle = (rawDeleteItem.title || '').trim();
@@ -221,13 +274,13 @@ function processMutations(calendar, payload) {
       return;
     }
     
-    // まずIDでマッチングを試みる
-    let eventEntry = scheduleId ? existingMap.get(scheduleId) : null;
+    // First try matching by ID
+    let eventEntry = scheduleId ? existingMap.scheduleIdMap.get(scheduleId) : null;
     
-    // IDでマッチングできない場合、日付とタイトルでマッチングを試みる
+    // If ID matching fails, try matching by date and title
     // Use existing events from the map instead of making additional calendar queries
     if (!eventEntry && deleteTitle && deleteStartDate && !Number.isNaN(deleteStartDate.getTime())) {
-      // 削除対象の日付を正規化（日付部分のみで比較）
+      // Normalize target date for deletion (compare date part only)
       const targetDate = new Date(deleteStartDate);
       targetDate.setHours(0, 0, 0, 0);
       const targetDateStr = Utilities.formatDate(targetDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -235,7 +288,7 @@ function processMutations(calendar, payload) {
       // Search through already-fetched existing events instead of making new queries
       const normalizedDeleteTitle = normalizeTitleForComparison(deleteTitle);
       
-      for (const [existingId, existingEvent] of existingMap.entries()) {
+      for (const [existingId, existingEvent] of existingMap.scheduleIdMap.entries()) {
         // Skip if already matched by ID
         if (scheduleId && existingId === scheduleId) {
           continue;
@@ -243,12 +296,12 @@ function processMutations(calendar, payload) {
         
         const eventTitle = (existingEvent.getTitle() || '').trim();
         
-        // タイトルが一致するかチェック（正規化して比較）
+        // Check if title matches (normalize and compare)
         if (normalizeTitleForComparison(eventTitle) !== normalizedDeleteTitle) {
           continue;
         }
         
-        // 日付が一致するかチェック（日付部分のみで比較）
+        // Check if date matches (compare date part only)
         let eventStartDate = null;
         if (existingEvent.isAllDayEvent()) {
           eventStartDate = new Date(existingEvent.getAllDayStartDate());
@@ -258,7 +311,7 @@ function processMutations(calendar, payload) {
         eventStartDate.setHours(0, 0, 0, 0);
         const eventDateStr = Utilities.formatDate(eventStartDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
         
-        // 日付が一致する場合
+        // When date matches
         if (eventDateStr === targetDateStr) {
           eventEntry = existingEvent;
           break;
@@ -266,12 +319,12 @@ function processMutations(calendar, payload) {
       }
     }
     
-    // マッチしたイベントを削除
+    // Delete matched event
     if (eventEntry) {
       try {
         eventEntry.deleteEvent();
         if (scheduleId) {
-        existingMap.delete(scheduleId);
+        existingMap.scheduleIdMap.delete(scheduleId);
         }
         deleted += 1;
       } catch (error) {
@@ -292,13 +345,19 @@ function processMutations(calendar, payload) {
 
 function buildExistingMap(events) {
   const map = new Map();
+  const googleIdMap = new Map();
   events.forEach((event) => {
     const match = (event.getDescription() || '').match(DESCRIPTION_REGEX);
     if (match && match[1]) {
       map.set(match[1], event);
     }
+    // Also map by Google event ID for faster lookup
+    const googleId = event.getId();
+    if (googleId) {
+      googleIdMap.set(googleId, event);
+    }
   });
-  return map;
+  return { scheduleIdMap: map, googleIdMap: googleIdMap };
 }
 
 function buildDescription(eventId, description) {
@@ -329,10 +388,17 @@ function getReminderMinutes(value) {
 
 function applyUpdates(event, { title, start, end, location, fullDescription, isAllDay, reminderMinutes }) {
   if (isAllDay) {
-    // 終日イベントの場合、開始日と終了日を設定（終了日は「含まない」日として扱われる）
+    // For all-day events, set start and end dates (end date is treated as exclusive)
     const startDate = new Date(start);
+    startDate.setHours(0, 0, 0, 0); // Ensure start is at midnight
+    
     const endDate = new Date(end);
-    // 終了日が開始日と同じまたはそれ以前の場合、開始日の翌日として扱う
+    // Extract date portion and add 1 day for exclusive end date
+    // The app sends inclusive end (e.g., Jan 2 23:59), but Google expects exclusive (Jan 3 00:00)
+    endDate.setHours(0, 0, 0, 0); // Normalize to midnight
+    endDate.setDate(endDate.getDate() + 1); // Add 1 day for exclusive end
+    
+    // If end date is the same as or before start date, treat as the day after start date
     if (endDate <= startDate) {
       endDate.setDate(startDate.getDate() + 1);
     }
@@ -353,10 +419,17 @@ function applyUpdates(event, { title, start, end, location, fullDescription, isA
 function createEvent(calendar, { title, start, end, location, isAllDay, fullDescription, reminderMinutes }) {
   let event;
   if (isAllDay) {
-    // 終日イベントの場合、開始日と終了日を設定（終了日は「含まない」日として扱われる）
+    // For all-day events, set start and end dates (end date is treated as exclusive)
     const startDate = new Date(start);
+    startDate.setHours(0, 0, 0, 0); // Ensure start is at midnight
+    
     const endDate = new Date(end);
-    // 終了日が開始日と同じまたはそれ以前の場合、開始日の翌日として扱う
+    // Extract date portion and add 1 day for exclusive end date
+    // The app sends inclusive end (e.g., Jan 2 23:59), but Google expects exclusive (Jan 3 00:00)
+    endDate.setHours(0, 0, 0, 0); // Normalize to midnight
+    endDate.setDate(endDate.getDate() + 1); // Add 1 day for exclusive end
+    
+    // If end date is the same as or before start date, treat as the day after start date
     if (endDate <= startDate) {
       endDate.setDate(startDate.getDate() + 1);
     }
@@ -410,11 +483,11 @@ function fetchCalendarEvents() {
 
   const events = calendar.getEvents(windowStart, windowEnd);
   
-  // 重複削除処理を実行（削除されたイベントのIDを取得）
+  // Execute deduplication (get IDs of deleted events)
   const deduplicationResult = deduplicateGoogleCalendarEvents(events);
   const deletedEventIds = new Set(deduplicationResult.deletedEventIds || []);
   
-  // 削除されたイベントを除外してマッピング
+  // Exclude deleted events and map
   const items = events
     .filter((event) => !deletedEventIds.has(event.getId()))
     .map((event) => {
@@ -435,8 +508,8 @@ function fetchCalendarEvents() {
     });
 
   const message = deduplicationResult.deleted > 0
-    ? `Googleカレンダーから予定を取得しました。重複削除: ${deduplicationResult.deleted}件`
-    : 'Googleカレンダーから予定を取得しました。';
+    ? `Fetched events from Google Calendar. Duplicates removed: ${deduplicationResult.deleted}`
+    : 'Fetched events from Google Calendar.';
 
   return buildResponse({
     success: true,
@@ -476,7 +549,7 @@ function clearCalendarEvents() {
 
   return buildResponse({
     success: true,
-    message: 'Googleカレンダーのschedule_mgrイベントを削除しました。',
+    message: 'Deleted schedule_mgr events from Google Calendar.',
     deleted,
     range: {
       start: toIsoString(windowStart),
@@ -485,20 +558,20 @@ function clearCalendarEvents() {
   });
 }
 
-// Googleカレンダー内の重複イベントを削除（同じ日・同じ名前のイベント）
+// Remove duplicate events in Google Calendar (events with same date and name)
 function deduplicateGoogleCalendarEvents(events) {
   if (!events || events.length === 0) {
     return { deleted: 0, deletedEventIds: [] };
   }
 
-  // 日付とタイトルでグループ化
+  // Group by date and title
   const eventsByDateTitle = new Map();
   
   events.forEach((event) => {
     const title = event.getTitle() || '';
     const normalizedTitle = normalizeTitleForComparison(title);
     
-    // 開始日を取得（終日イベントの場合はgetAllDayStartDate、そうでない場合はgetStartTime）
+    // Get start date (getAllDayStartDate for all-day events, getStartTime otherwise)
     let eventDate;
     if (event.isAllDayEvent()) {
       eventDate = event.getAllDayStartDate();
@@ -506,7 +579,7 @@ function deduplicateGoogleCalendarEvents(events) {
       eventDate = event.getStartTime();
     }
     
-    // 日付部分のみを取得（YYYY-MM-DD形式）
+    // Get date part only (YYYY-MM-DD format)
     const dateStr = Utilities.formatDate(eventDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
     const key = `${dateStr}|${normalizedTitle}`;
     
@@ -519,39 +592,39 @@ function deduplicateGoogleCalendarEvents(events) {
   let deleted = 0;
   const deletedEventIds = [];
 
-  // 各グループで重複チェック
+  // Check duplicates in each group
   eventsByDateTitle.forEach((duplicates, key) => {
-    if (duplicates.length <= 1) return; // 重複なし
+    if (duplicates.length <= 1) return; // No duplicates
 
-    // 最新のイベントを残す（lastUpdatedが新しいもの）
+    // Keep the latest event (newest lastUpdated)
     duplicates.sort((a, b) => {
       const aTime = a.getLastUpdated() ? a.getLastUpdated().getTime() : 0;
       const bTime = b.getLastUpdated() ? b.getLastUpdated().getTime() : 0;
-      return bTime - aTime; // 新しい順
+      return bTime - aTime; // Newest first
     });
 
     const keeper = duplicates[0];
-    const title = keeper.getTitle() || '(無題)';
+    const title = keeper.getTitle() || '(Untitled)';
     const dateStr = key.split('|')[0];
     
-    console.log(`[Google重複削除] "${title}" (${dateStr}) -> ${duplicates.length}件の重複を検出`);
+    console.log(`[Google Deduplication] "${title}" (${dateStr}) -> Found ${duplicates.length} duplicates`);
 
-    // 最新以外を削除
+    // Delete all except the latest
     for (let i = 1; i < duplicates.length; i++) {
       try {
         const eventId = duplicates[i].getId();
         duplicates[i].deleteEvent();
         deleted += 1;
         deletedEventIds.push(eventId);
-        console.log(`[Google重複削除] 削除: "${title}" (${dateStr}) - ${eventId}`);
+        console.log(`[Google Deduplication] Deleted: "${title}" (${dateStr}) - ${eventId}`);
       } catch (error) {
-        console.error(`[Google重複削除] 削除に失敗:`, duplicates[i].getId(), error);
+        console.error(`[Google Deduplication] Failed to delete:`, duplicates[i].getId(), error);
       }
     }
   });
 
   if (deleted > 0) {
-    console.log(`[Google重複削除] 完了: ${deleted}件の重複を削除しました`);
+    console.log(`[Google Deduplication] Completed: Removed ${deleted} duplicates`);
   }
 
   return { deleted, deletedEventIds };
@@ -583,12 +656,12 @@ function toIsoString(date) {
   return Utilities.formatDate(date, 'UTC', "yyyy-MM-dd'T'HH:mm:ss'Z'");
 }
 
-// タイトル比較用に正規化（空白を除去、小文字に変換）
+// Normalize title for comparison (remove whitespace, convert to lowercase)
 function normalizeTitleForComparison(title) {
   if (!title && title !== 0) return '';
   return String(title)
     .trim()
-    .replace(/\s+/g, '') // 全ての空白を除去
+    .replace(/\s+/g, '') // Remove all whitespace
     .toLowerCase();
 }
 

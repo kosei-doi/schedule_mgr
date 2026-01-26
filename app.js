@@ -829,7 +829,7 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
   const filteredUpserts = Array.isArray(upserts)
     ? upserts.filter(ev => ev && ev.id && ev.isTimetable !== true)
     : [];
-  // Deletes accept either ID or event object
+  // Deletes accept either ID or event object. Include googleEventId when present so code.js can delete by Google ID (e.g. fetched-only events).
   const filteredDeletes = Array.isArray(deletes)
     ? deletes
         .filter(item => {
@@ -838,18 +838,20 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
           return false;
         })
         .map(item => {
-          // If string, use as is; if object, include ID and event information
           if (typeof item === 'string') {
             return item;
           }
-          // If event object, include ID and date/title information
-          return {
+          const out = {
             id: item.id,
             title: item.title || '',
             startTime: item.startTime || null,
             endTime: item.endTime || null,
             allDay: item.allDay === true,
           };
+          if (item.googleEventId && typeof item.googleEventId === 'string') {
+            out.googleEventId = item.googleEventId.trim();
+          }
+          return out;
         })
     : [];
 
@@ -1585,8 +1587,36 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
 }
 
 function normalizeGoogleEvent(googleEvent = {}, ranges) {
-  const startTime = normalizeEventDateTimeString(googleEvent.startDateTime);
-  const endTime = normalizeEventDateTimeString(googleEvent.endDateTime);
+  let startTime, endTime;
+
+  // For all-day events, Google uses exclusive end dates (e.g., Jan 2 00:00 means "ends at start of Jan 2", i.e., Jan 1 inclusive)
+  // We need to convert this to our app's inclusive end date format (e.g., Jan 1 23:59)
+  if (googleEvent.allDay) {
+    startTime = normalizeEventDateTimeString(googleEvent.startDateTime);
+    const normalizedEnd = normalizeEventDateTimeString(googleEvent.endDateTime);
+    
+    if (normalizedEnd) {
+      // Extract date part and subtract 1 day to convert exclusive end to inclusive end
+      const endDatePart = normalizedEnd.split('T')[0];
+      if (endDatePart) {
+        const endDate = new Date(endDatePart + 'T00:00:00');
+        endDate.setDate(endDate.getDate() - 1); // Subtract 1 day
+        const year = endDate.getFullYear();
+        const month = String(endDate.getMonth() + 1).padStart(2, '0');
+        const day = String(endDate.getDate()).padStart(2, '0');
+        endTime = `${year}-${month}-${day}T23:59`;
+      } else {
+        endTime = normalizedEnd;
+      }
+    } else {
+      endTime = '';
+    }
+  } else {
+    // Timed events: use normal conversion
+    startTime = normalizeEventDateTimeString(googleEvent.startDateTime);
+    endTime = normalizeEventDateTimeString(googleEvent.endDateTime);
+  }
+
   const candidate = {
     title: googleEvent.title || '',
     description: googleEvent.description || '',
@@ -1928,7 +1958,6 @@ function getEventsByDate(date) {
         if (typeof ev.startTime !== 'string') return;
         const eventStartDate = ev.startTime.split('T')[0];
         const eventEndDate = ev.endTime && typeof ev.endTime === 'string' ? ev.endTime.split('T')[0] : eventStartDate;
-        
         // Check if specified date is between event start and end date (inclusive)
         if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
           list.push(ev);
@@ -2589,6 +2618,10 @@ function showEventModal(eventId = null) {
     if (deleteBtn) deleteBtn.style.display = 'none';
     if (saveBtn) saveBtn.textContent = 'Create';
     
+    // Default reminder: 30 minutes before
+    const reminderSelect = safeGetElementById('eventReminder');
+    if (reminderSelect) reminderSelect.value = '30';
+    
     // Clear all fields (title, description, color, etc.)
     const titleInput = safeGetElementById('eventTitle');
     if (titleInput) titleInput.value = '';
@@ -2643,11 +2676,10 @@ function showEventModal(eventId = null) {
       recurrenceEndGroup.classList.add('hidden');
     }
     
-    // Reset recurrence and reminder
+    // Reset recurrence; default reminder 30 minutes before
     const recurrenceSelect = safeGetElementById('eventRecurrence');
-    const reminderSelect = safeGetElementById('eventReminder');
     if (recurrenceSelect) recurrenceSelect.value = 'none';
-    if (reminderSelect) reminderSelect.value = '';
+    if (reminderSelect) reminderSelect.value = '30';
   }
   
   if (modal) {
@@ -2794,15 +2826,8 @@ function createMonthDayElement(date, currentMonth) {
   // Events for that day (timetable events are hidden in month view)
   const dayEvents = getEventsByDate(date);
   const visibleEvents = dayEvents.filter(event => event.isTimetable !== true);
-  const hasTimetableEvents = dayEvents.some(event => event.isTimetable === true);
-
-  if (hasTimetableEvents) {
-    div.classList.add('has-timetable');
-  }
 
   if (visibleEvents.length > 0) {
-    div.classList.add('has-events');
-    
     const eventsContainer = document.createElement('div');
     eventsContainer.className = 'month-day-events';
     
@@ -3168,18 +3193,24 @@ function splitEventsByAllDay(eventList = []) {
 
 function applyAllDayMode(isAllDay, controls) {
   const { startInput, endInput, allDayRow } = controls;
+  const allDayStartInput = safeGetElementById('eventAllDayStart');
+  const allDayEndInput = safeGetElementById('eventAllDayEnd');
   if (isAllDay) {
     allDayRow?.classList.remove('hidden');
     startInput?.classList.add('readonly-input');
     endInput?.classList.add('readonly-input');
     startInput?.setAttribute('disabled', 'disabled');
     endInput?.setAttribute('disabled', 'disabled');
+    allDayStartInput?.removeAttribute('disabled');
+    allDayEndInput?.removeAttribute('disabled');
   } else {
     allDayRow?.classList.add('hidden');
     startInput?.classList.remove('readonly-input');
     endInput?.classList.remove('readonly-input');
     startInput?.removeAttribute('disabled');
     endInput?.removeAttribute('disabled');
+    allDayStartInput?.setAttribute('disabled', 'disabled');
+    allDayEndInput?.setAttribute('disabled', 'disabled');
   }
 }
 
@@ -3190,7 +3221,8 @@ function normalizeEventDateTimeString(value) {
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return formatDateTimeLocal(date);
+  const out = formatDateTimeLocal(date);
+  return out;
 }
 
 function getAllowedDateRanges() {
@@ -3978,24 +4010,6 @@ function setupEventListeners() {
     try {
       updateCrudStatusIndicator('processing');
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'crud-run-1',
-          hypothesisId: 'CRUD_FORM',
-          location: 'app.js:3939',
-          message: 'submitHandler start',
-          data: {
-            editingEventId: editingEventId || null,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
-
       const formData = new FormData(e.target);
       const isAllDay = formData.get('allDay') === 'on';
       
@@ -4030,21 +4044,6 @@ function setupEventListeners() {
       // Validation
       const errors = validateEvent(event);
       if (errors.length > 0) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'crud-run-1',
-            hypothesisId: 'CRUD_FORM',
-            location: 'app.js:3975',
-            message: 'validation failed',
-            data: { errors },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
         updateCrudStatusIndicator('error');
         showMessage(errors.join(' / '), 'error', 6000);
         delete eventForm.dataset.submitting;
@@ -4129,21 +4128,6 @@ function setupEventListeners() {
         
         // Save to Firebase (update local array after success)
         const newId = await addEvent(newEvent);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'crud-run-1',
-            hypothesisId: 'CRUD_FORM',
-            location: 'app.js:4013',
-            message: 'addEvent from temp completed',
-            data: { newId: newId || null },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
         if (!newId) {
           throw new Error('Failed to add event');
         }
@@ -4156,21 +4140,6 @@ function setupEventListeners() {
         // Update existing event
         // Execute Firebase update first, then update local array after success
         const updateSuccess = await updateEvent(eventIdToProcess, event);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'crud-run-1',
-            hypothesisId: 'CRUD_FORM',
-            location: 'app.js:4025',
-            message: 'updateEvent completed',
-            data: { editingEventId, updateSuccess },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
         if (!updateSuccess) {
           throw new Error('Failed to update event');
         }
@@ -4196,21 +4165,6 @@ function setupEventListeners() {
       } else {
         // Create new event
         const newId = await addEvent(event);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId: 'debug-session',
-            runId: 'crud-run-1',
-            hypothesisId: 'CRUD_FORM',
-            location: 'app.js:3917',
-            message: 'addEvent (new) completed',
-            data: { newId: newId || null },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
         if (!newId) {
           throw new Error('Failed to add event');
         }
@@ -4224,21 +4178,6 @@ function setupEventListeners() {
       updateCrudStatusIndicator('success');
       showMessage(wasEditing ? 'Event updated' : 'Event added', 'success', 3000);
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: 'debug-session',
-          runId: 'crud-run-1',
-          hypothesisId: 'CRUD_FORM',
-          location: 'app.js:4175',
-          message: 'submitHandler error',
-          data: { errorMessage: error?.message, errorName: error?.name },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       updateCrudStatusIndicator('error');
       showMessage('Failed to save event. Please try again.', 'error', 6000);
     } finally {
