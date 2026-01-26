@@ -314,12 +314,34 @@
                         </div>
                         <div class="form-row compact-row" id="timeInputRow">
                             <div class="form-group compact">
-                                <label for="eventStartTime">Start *</label>
-                                <input type="datetime-local" id="eventStartTime" name="startTime" required aria-required="true">
+                                <label for="eventStartDate">Start Date *</label>
+                                <input type="date" id="eventStartDate" name="startDate" required aria-required="true">
                             </div>
                             <div class="form-group compact">
-                                <label for="eventEndTime">End *</label>
-                                <input type="datetime-local" id="eventEndTime" name="endTime" required aria-required="true">
+                                <label for="eventStartTime">Start Time *</label>
+                                <input type="time" id="eventStartTime" name="startTime" required aria-required="true" step="900">
+                                <div class="time-quick-actions">
+                                    <button type="button" class="time-quick-btn" data-action="now-start">Now</button>
+                                    <button type="button" class="time-quick-btn" data-action="preset-start" data-time="09:00">9:00</button>
+                                    <button type="button" class="time-quick-btn" data-action="preset-start" data-time="12:00">12:00</button>
+                                    <button type="button" class="time-quick-btn" data-action="preset-start" data-time="17:00">17:00</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-row compact-row" id="endTimeInputRow">
+                            <div class="form-group compact">
+                                <label for="eventEndDate">End Date *</label>
+                                <input type="date" id="eventEndDate" name="endDate" required aria-required="true">
+                            </div>
+                            <div class="form-group compact">
+                                <label for="eventEndTime">End Time *</label>
+                                <input type="time" id="eventEndTime" name="endTime" required aria-required="true" step="900">
+                                <div class="time-quick-actions">
+                                    <button type="button" class="time-quick-btn" data-action="now-end">Now</button>
+                                    <button type="button" class="time-quick-btn" data-action="preset-end" data-time="12:00">12:00</button>
+                                    <button type="button" class="time-quick-btn" data-action="preset-end" data-time="17:00">17:00</button>
+                                    <button type="button" class="time-quick-btn" data-action="preset-end" data-time="20:00">20:00</button>
+                                </div>
                             </div>
                         </div>
                         <div class="form-row all-day-date-row hidden" id="allDayDateRow">
@@ -387,6 +409,24 @@
                         <div class="form-group compact hidden" id="recurrenceEndGroup">
                             <label for="eventRecurrenceEnd">Recurrence End Date</label>
                             <input type="date" id="eventRecurrenceEnd" name="recurrenceEnd">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group compact hidden" id="recurringSeriesOptions">
+                        <label class="recurring-series-label">Apply to:</label>
+                        <div class="recurring-series-options">
+                            <label class="recurring-option-label">
+                                <input type="radio" name="recurringSeriesAction" value="single" checked>
+                                <span class="recurring-option-text">This event only</span>
+                            </label>
+                            <label class="recurring-option-label">
+                                <input type="radio" name="recurringSeriesAction" value="thisAndFuture">
+                                <span class="recurring-option-text">This and subsequent events</span>
+                            </label>
+                            <label class="recurring-option-label">
+                                <input type="radio" name="recurringSeriesAction" value="all">
+                                <span class="recurring-option-text">All events in series</span>
+                            </label>
                         </div>
                     </div>
                     

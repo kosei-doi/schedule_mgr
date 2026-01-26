@@ -1832,6 +1832,231 @@ async function deleteEvent(id, options = {}) {
   return true;
 }
 
+// Find all events in a recurring series
+function findRecurringSeriesEvents(recurringSeriesId) {
+  if (!recurringSeriesId || !Array.isArray(events)) {
+    return [];
+  }
+  return events.filter(ev => ev && ev.recurringSeriesId === recurringSeriesId);
+}
+
+// Find this event and all subsequent events in a recurring series
+function findThisAndSubsequentEvents(eventId, recurringSeriesId) {
+  if (!eventId || !recurringSeriesId || !Array.isArray(events)) {
+    return [];
+  }
+  
+  const currentEvent = events.find(ev => ev && ev.id === eventId);
+  if (!currentEvent || !currentEvent.startTime) {
+    return [];
+  }
+  
+  const currentStartTime = new Date(currentEvent.startTime);
+  if (Number.isNaN(currentStartTime.getTime())) {
+    return [];
+  }
+  
+  const seriesEvents = findRecurringSeriesEvents(recurringSeriesId);
+  
+  // Return current event and all events that start on or after the current event's start time
+  return seriesEvents.filter(ev => {
+    if (!ev || !ev.startTime) return false;
+    const evStartTime = new Date(ev.startTime);
+    if (Number.isNaN(evStartTime.getTime())) return false;
+    return evStartTime >= currentStartTime;
+  }).sort((a, b) => {
+    const aTime = new Date(a.startTime).getTime();
+    const bTime = new Date(b.startTime).getTime();
+    return aTime - bTime;
+  });
+}
+
+// Bulk update this event and all subsequent events in a recurring series
+async function updateThisAndSubsequentEvents(eventId, recurringSeriesId, eventUpdates, options = {}) {
+  const { syncGoogle = true } = options;
+  
+  const targetEvents = findThisAndSubsequentEvents(eventId, recurringSeriesId);
+  if (targetEvents.length === 0) {
+    return { updated: 0 };
+  }
+  
+  let updatedCount = 0;
+  const errors = [];
+  
+  for (const event of targetEvents) {
+    try {
+      const success = await updateEvent(event.id, eventUpdates, { syncGoogle: false });
+      if (success) {
+        updatedCount++;
+      } else {
+        errors.push(event.id);
+      }
+    } catch (error) {
+      errors.push(event.id);
+    }
+  }
+  
+  // Sync all updates to Google at once
+  if (syncGoogle && updatedCount > 0) {
+    try {
+      updateGoogleSyncIndicator('syncing');
+      const updatedEvents = targetEvents
+        .filter(ev => !errors.includes(ev.id))
+        .map(ev => ({
+          ...ev,
+          ...eventUpdates,
+          id: ev.id,
+        }));
+      
+      await mirrorMutationsToGoogle({
+        upserts: updatedEvents,
+        silent: true,
+      });
+      updateGoogleSyncIndicator('synced');
+    } catch (error) {
+      updateGoogleSyncIndicator('error');
+    }
+  }
+  
+  return { updated: updatedCount, errors };
+}
+
+// Bulk delete this event and all subsequent events in a recurring series
+async function deleteThisAndSubsequentEvents(eventId, recurringSeriesId, options = {}) {
+  const { syncGoogle = true } = options;
+  
+  const targetEvents = findThisAndSubsequentEvents(eventId, recurringSeriesId);
+  if (targetEvents.length === 0) {
+    return { deleted: 0 };
+  }
+  
+  let deletedCount = 0;
+  const errors = [];
+  
+  for (const event of targetEvents) {
+    try {
+      const success = await deleteEvent(event.id, { syncGoogle: false });
+      if (success) {
+        deletedCount++;
+      } else {
+        errors.push(event.id);
+      }
+    } catch (error) {
+      errors.push(event.id);
+    }
+  }
+  
+  // Sync all deletes to Google at once
+  if (syncGoogle && deletedCount > 0) {
+    try {
+      updateGoogleSyncIndicator('syncing');
+      const deletedEvents = targetEvents.filter(ev => !errors.includes(ev.id));
+      await mirrorMutationsToGoogle({
+        deletes: deletedEvents,
+        silent: true,
+      });
+      updateGoogleSyncIndicator('synced');
+    } catch (error) {
+      updateGoogleSyncIndicator('error');
+    }
+  }
+  
+  return { deleted: deletedCount, errors };
+}
+
+// Bulk update all events in a recurring series
+async function updateRecurringSeries(recurringSeriesId, eventUpdates, options = {}) {
+  const { syncGoogle = true } = options;
+  
+  const seriesEvents = findRecurringSeriesEvents(recurringSeriesId);
+  if (seriesEvents.length === 0) {
+    return { updated: 0 };
+  }
+  
+  let updatedCount = 0;
+  const errors = [];
+  
+  for (const event of seriesEvents) {
+    try {
+      const success = await updateEvent(event.id, eventUpdates, { syncGoogle: false });
+      if (success) {
+        updatedCount++;
+      } else {
+        errors.push(event.id);
+      }
+    } catch (error) {
+      errors.push(event.id);
+    }
+  }
+  
+  // Sync all updates to Google at once
+  if (syncGoogle && updatedCount > 0) {
+    try {
+      updateGoogleSyncIndicator('syncing');
+      const updatedEvents = seriesEvents
+        .filter(ev => !errors.includes(ev.id))
+        .map(ev => ({
+          ...ev,
+          ...eventUpdates,
+          id: ev.id,
+        }));
+      
+      await mirrorMutationsToGoogle({
+        upserts: updatedEvents,
+        silent: true,
+      });
+      updateGoogleSyncIndicator('synced');
+    } catch (error) {
+      updateGoogleSyncIndicator('error');
+    }
+  }
+  
+  return { updated: updatedCount, errors };
+}
+
+// Bulk delete all events in a recurring series
+async function deleteRecurringSeries(recurringSeriesId, options = {}) {
+  const { syncGoogle = true } = options;
+  
+  const seriesEvents = findRecurringSeriesEvents(recurringSeriesId);
+  if (seriesEvents.length === 0) {
+    return { deleted: 0 };
+  }
+  
+  let deletedCount = 0;
+  const errors = [];
+  
+  for (const event of seriesEvents) {
+    try {
+      const success = await deleteEvent(event.id, { syncGoogle: false });
+      if (success) {
+        deletedCount++;
+      } else {
+        errors.push(event.id);
+      }
+    } catch (error) {
+      errors.push(event.id);
+    }
+  }
+  
+  // Sync all deletes to Google at once
+  if (syncGoogle && deletedCount > 0) {
+    try {
+      updateGoogleSyncIndicator('syncing');
+      const deletedEvents = seriesEvents.filter(ev => !errors.includes(ev.id));
+      await mirrorMutationsToGoogle({
+        deletes: deletedEvents,
+        silent: true,
+      });
+      updateGoogleSyncIndicator('synced');
+    } catch (error) {
+      updateGoogleSyncIndicator('error');
+    }
+  }
+  
+  return { deleted: deletedCount, errors };
+}
+
 async function clearAllEvents({ skipConfirm = false, silent = false } = {}) {
   if (!skipConfirm) {
     const confirmed = await showConfirmModal('Delete all events and timetable data. Are you sure?', 'Confirm Deletion');
@@ -1950,79 +2175,32 @@ function getEventsByDate(date) {
   
   events.forEach(ev => {
     if (!ev || !ev.id) return;
-    if (!ev.recurrence || ev.recurrence === 'none') {
-      if (!ev.startTime) return;
-      
-      // All-day event
-      if (isAllDayEvent(ev)) {
-        if (typeof ev.startTime !== 'string') return;
-        const eventStartDate = ev.startTime.split('T')[0];
-        const eventEndDate = ev.endTime && typeof ev.endTime === 'string' ? ev.endTime.split('T')[0] : eventStartDate;
-        // Check if specified date is between event start and end date (inclusive)
-        if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
-          list.push(ev);
-        }
-      return;
-    }
-      
-      // Timed event
-      const eventStart = new Date(ev.startTime);
-      const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
-      
-      if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
-      
-      // Check if period from 00:00 to 23:59:59 of specified date overlaps with event period
-      // Event starts on previous day and ends on specified day, or
-      // Event starts on specified day and ends on next day, or
-      // Event period is completely contained within specified day
-      if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
+    if (!ev.startTime) return;
+    
+    // All-day event
+    if (isAllDayEvent(ev)) {
+      if (typeof ev.startTime !== 'string') return;
+      const eventStartDate = ev.startTime.split('T')[0];
+      const eventEndDate = ev.endTime && typeof ev.endTime === 'string' ? ev.endTime.split('T')[0] : eventStartDate;
+      // Check if specified date is between event start and end date (inclusive)
+      if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
         list.push(ev);
       }
       return;
     }
     
-    // Recurrence expansion (simple)
-    if (!ev.startTime || !ev.endTime) return;
-    const start = new Date(ev.startTime);
-    const end = new Date(ev.endTime);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+    // Timed event
+    const eventStart = new Date(ev.startTime);
+    const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
     
-    // recurrenceEnd is a date-only string (YYYY-MM-DD), append time if needed
-    const recurEnd = ev.recurrenceEnd && typeof ev.recurrenceEnd === 'string'
-      ? new Date(ev.recurrenceEnd.includes('T') ? ev.recurrenceEnd : ev.recurrenceEnd + 'T23:59:59')
-      : null;
-    if (recurEnd && Number.isNaN(recurEnd.getTime())) return;
+    if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
     
-    const target = new Date(dateObj);
-    target.setHours(start.getHours(), start.getMinutes(), 0, 0);
-    if (Number.isNaN(target.getTime())) return;
-    if (recurEnd && target > recurEnd) return;
-    
-    const matches = (
-      ev.recurrence === 'daily' ||
-      (ev.recurrence === 'weekly' && target.getDay() === start.getDay()) ||
-      (ev.recurrence === 'monthly' && target.getDate() === start.getDate())
-    );
-    
-    if (matches && target >= start) {
-      const inst = { ...ev };
-      const duration = end.getTime() - start.getTime();
-      if (duration > 0) {
-        const instStartTime = formatDateTimeLocal(target);
-        const instEndTime = formatDateTimeLocal(new Date(target.getTime() + duration));
-        if (!instStartTime || !instEndTime) return;
-        
-        inst.startTime = instStartTime;
-        inst.endTime = instEndTime;
-        
-        // Recurring events may also span days, so check similarly
-        const instStart = new Date(inst.startTime);
-        const instEnd = new Date(inst.endTime);
-        if (Number.isNaN(instStart.getTime()) || Number.isNaN(instEnd.getTime())) return;
-        if (instStart <= targetDateEnd && instEnd >= targetDate) {
-          list.push(inst);
-        }
-      }
+    // Check if period from 00:00 to 23:59:59 of specified date overlaps with event period
+    // Event starts on previous day and ends on specified day, or
+    // Event starts on specified day and ends on next day, or
+    // Event period is completely contained within specified day
+    if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
+      list.push(ev);
     }
   });
   return list;
@@ -2523,13 +2701,15 @@ function showEventModal(eventId = null) {
   const saveBtn = form?.querySelector('button[type="submit"]');
   const startInput = safeGetElementById('eventStartTime');
   const endInput = safeGetElementById('eventEndTime');
+  const startDateInput = safeGetElementById('eventStartDate');
+  const endDateInput = safeGetElementById('eventEndDate');
   const allDayCheckbox = safeGetElementById('eventAllDay');
   const allDayRow = safeGetElementById('allDayDateRow');
   const allDayStartInput = safeGetElementById('eventAllDayStart');
   const allDayEndInput = safeGetElementById('eventAllDayEnd');
   
   // Check required elements
-  if (!modal || !modalTitle || !form || !startInput || !endInput) {
+  if (!modal || !modalTitle || !form || !startInput || !endInput || !startDateInput || !endDateInput) {
     return;
   }
   
@@ -2545,6 +2725,14 @@ function showEventModal(eventId = null) {
     if (endInput) {
       endInput.disabled = false;
       endInput.classList.remove('readonly-input');
+    }
+    if (startDateInput) {
+      startDateInput.disabled = false;
+      startDateInput.classList.remove('readonly-input');
+    }
+    if (endDateInput) {
+      endDateInput.disabled = false;
+      endDateInput.classList.remove('readonly-input');
     }
     if (allDayCheckbox) {
       allDayCheckbox.checked = false;
@@ -2567,13 +2755,37 @@ function showEventModal(eventId = null) {
     if (deleteBtn) deleteBtn.style.display = 'block';
     if (saveBtn) saveBtn.textContent = 'Save';
     
+    // Check if this event is part of a recurring series
+    const recurringSeriesId = event.recurringSeriesId;
+    const seriesEvents = recurringSeriesId ? findRecurringSeriesEvents(recurringSeriesId) : [];
+    const isPartOfSeries = seriesEvents.length > 1;
+    
+    // Show/hide recurring series options
+    const recurringSeriesOptions = safeGetElementById('recurringSeriesOptions');
+    if (recurringSeriesOptions) {
+      if (isPartOfSeries) {
+        recurringSeriesOptions.classList.remove('hidden');
+        // Set default to "single" (this event only)
+        const singleRadio = recurringSeriesOptions.querySelector('input[value="single"]');
+        if (singleRadio) singleRadio.checked = true;
+      } else {
+        recurringSeriesOptions.classList.add('hidden');
+      }
+    }
+    
     // Set form values
     const titleInput = safeGetElementById('eventTitle');
     if (titleInput) titleInput.value = event.title || '';
     const descInput = safeGetElementById('eventDescription');
     if (descInput) descInput.value = event.description || '';
-    if (startInput) startInput.value = toDateTimeLocalValue(event.startTime);
-    if (endInput) endInput.value = toDateTimeLocalValue(event.endTime);
+    
+    // Split datetime into date and time
+    const startDateTime = splitDateTime(event.startTime);
+    const endDateTime = splitDateTime(event.endTime);
+    if (startDateInput) startDateInput.value = startDateTime.date;
+    if (startInput) startInput.value = startDateTime.time;
+    if (endDateInput) endDateInput.value = endDateTime.date;
+    if (endInput) endInput.value = endDateTime.time;
     
     if (allDayCheckbox) {
       const isAllDay = isAllDayEvent(event);
@@ -2639,8 +2851,15 @@ function showEventModal(eventId = null) {
       if (event) {
         const descInput = safeGetElementById('eventDescription');
         if (descInput) descInput.value = event.description || '';
-        if (startInput) startInput.value = toDateTimeLocalValue(event.startTime);
-        if (endInput) endInput.value = toDateTimeLocalValue(event.endTime);
+        
+        // Split datetime into date and time
+        const startDateTime = splitDateTime(event.startTime);
+        const endDateTime = splitDateTime(event.endTime);
+        if (startDateInput) startDateInput.value = startDateTime.date;
+        if (startInput) startInput.value = startDateTime.time;
+        if (endDateInput) endDateInput.value = endDateTime.date;
+        if (endInput) endInput.value = endDateTime.time;
+        
         if (allDayCheckbox) {
           const isAllDay = isAllDayEvent(event);
           allDayCheckbox.checked = isAllDay;
@@ -2662,8 +2881,10 @@ function showEventModal(eventId = null) {
       startTime.setMinutes(0);
       const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 more hour later
       
-      if (startInput) startInput.value = formatDateTimeLocal(startTime);
-      if (endInput) endInput.value = formatDateTimeLocal(endTime);
+      if (startDateInput) startDateInput.value = formatDateOnly(startTime);
+      if (startInput) startInput.value = formatTimeOnly(startTime);
+      if (endDateInput) endDateInput.value = formatDateOnly(endTime);
+      if (endInput) endInput.value = formatTimeOnly(endTime);
     }
     if (allDayCheckbox) {
       allDayCheckbox.checked = false;
@@ -2674,6 +2895,12 @@ function showEventModal(eventId = null) {
     const recurrenceEndGroup = safeGetElementById('recurrenceEndGroup');
     if (recurrenceEndGroup) {
       recurrenceEndGroup.classList.add('hidden');
+    }
+    
+    // Hide recurring series options (only shown when editing events in a series)
+    const recurringSeriesOptions = safeGetElementById('recurringSeriesOptions');
+    if (recurringSeriesOptions) {
+      recurringSeriesOptions.classList.add('hidden');
     }
     
     // Reset recurrence; default reminder 30 minutes before
@@ -3169,6 +3396,29 @@ function formatDateOnly(value) {
   return `${year}-${month}-${day}`;
 }
 
+function formatTimeOnly(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function combineDateAndTime(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return '';
+  return `${dateStr}T${timeStr}`;
+}
+
+function splitDateTime(dateTimeStr) {
+  if (!dateTimeStr) return { date: '', time: '' };
+  const parts = dateTimeStr.split('T');
+  return {
+    date: parts[0] || '',
+    time: parts[1] || ''
+  };
+}
+
 function isAllDayEvent(event) {
   return event?.allDay === true;
 }
@@ -3395,6 +3645,66 @@ function addDays(date, days) {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
   return result;
+}
+
+// Generate all occurrence dates for a recurring event
+function generateRecurrenceOccurrences(startTime, endTime, recurrence, recurrenceEnd) {
+  if (!recurrence || recurrence === 'none' || !recurrenceEnd) {
+    return [];
+  }
+  
+  const start = new Date(startTime);
+  if (Number.isNaN(start.getTime())) {
+    return [];
+  }
+  
+  // Parse recurrenceEnd (date-only string YYYY-MM-DD)
+  const recurEndStr = typeof recurrenceEnd === 'string' && recurrenceEnd.includes('T')
+    ? recurrenceEnd
+    : (recurrenceEnd || '') + 'T23:59:59';
+  const end = new Date(recurEndStr);
+  if (Number.isNaN(end.getTime())) {
+    return [];
+  }
+  
+  // Calculate duration of the original event
+  const originalEnd = new Date(endTime);
+  const duration = Number.isNaN(originalEnd.getTime()) ? 0 : (originalEnd.getTime() - start.getTime());
+  
+  const occurrences = [];
+  const current = new Date(start);
+  
+  while (current <= end) {
+    // Check if this occurrence matches the recurrence pattern
+    let matches = false;
+    
+    if (recurrence === 'daily') {
+      matches = true;
+    } else if (recurrence === 'weekly') {
+      // Same day of week as start
+      matches = current.getDay() === start.getDay();
+    } else if (recurrence === 'monthly') {
+      // Same day of month as start
+      matches = current.getDate() === start.getDate();
+    }
+    
+    if (matches) {
+      occurrences.push({
+        startTime: new Date(current),
+        endTime: new Date(current.getTime() + duration)
+      });
+    }
+    
+    // Move to next day
+    current.setDate(current.getDate() + 1);
+    
+    // Safety limit: prevent infinite loops (max 10 years)
+    if (occurrences.length > 3650) {
+      break;
+    }
+  }
+  
+  return occurrences;
 }
 
 // Month calculation
@@ -3861,6 +4171,8 @@ function setupEventListeners() {
   
   const startInput = safeGetElementById('eventStartTime');
   const endInput = safeGetElementById('eventEndTime');
+  const startDateInput = safeGetElementById('eventStartDate');
+  const endDateInput = safeGetElementById('eventEndDate');
   const allDayCheckbox = safeGetElementById('eventAllDay');
   const allDayRow = safeGetElementById('allDayDateRow');
   const allDayStartInput = safeGetElementById('eventAllDayStart');
@@ -3874,8 +4186,9 @@ function setupEventListeners() {
       applyAllDayMode(isAllDay, { startInput, endInput, allDayRow });
       if (isAllDay) {
         if (allDayStartInput && !allDayStartInput.value) {
-          const source = startInput?.value || formatDateTimeLocal(new Date());
-          allDayStartInput.value = formatDateOnly(source);
+          const sourceDate = startDateInput?.value || formatDateOnly(new Date());
+          const sourceTime = startInput?.value || formatTimeOnly(new Date());
+          allDayStartInput.value = sourceDate || formatDateOnly(new Date());
         }
         if (allDayEndInput && !allDayEndInput.value) {
           allDayEndInput.value = allDayStartInput.value;
@@ -3886,6 +4199,111 @@ function setupEventListeners() {
       }
     };
     eventListeners.add(allDayCheckbox, 'change', handler);
+  }
+  
+  // Time quick action buttons
+  if (startDateInput && startInput && endDateInput && endInput) {
+    const timeQuickButtons = document.querySelectorAll('.time-quick-btn');
+    if (timeQuickButtons.length > 0) {
+      timeQuickButtons.forEach(btn => {
+        const handler = () => {
+          try {
+            const action = btn.dataset.action;
+            
+            const now = new Date();
+            
+            if (action === 'now-start') {
+              startDateInput.value = formatDateOnly(now);
+              startInput.value = formatTimeOnly(now);
+              // Auto-set end time to 1 hour later
+              const endTime = new Date(now.getTime() + 60 * 60 * 1000);
+              endDateInput.value = formatDateOnly(endTime);
+              endInput.value = formatTimeOnly(endTime);
+            } else if (action === 'now-end') {
+              endDateInput.value = formatDateOnly(now);
+              endInput.value = formatTimeOnly(now);
+            } else if (action === 'preset-start') {
+              const presetTime = btn.dataset.time || '09:00';
+              startInput.value = presetTime;
+              // Auto-set end time to 1 hour later
+              const startDate = startDateInput.value || formatDateOnly(now);
+              const startDateTime = combineDateAndTime(startDate, presetTime);
+              const start = new Date(startDateTime);
+              if (!Number.isNaN(start.getTime())) {
+                const endTime = new Date(start.getTime() + 60 * 60 * 1000);
+                endDateInput.value = formatDateOnly(endTime);
+                endInput.value = formatTimeOnly(endTime);
+              }
+            } else if (action === 'preset-end') {
+              const presetTime = btn.dataset.time || '17:00';
+              endInput.value = presetTime;
+            }
+          } catch (error) {
+            console.error('Failed to set quick time:', error);
+          }
+        };
+        eventListeners.add(btn, 'click', handler);
+      });
+    }
+    
+    // Auto-sync end time when start time changes
+    let isUpdating = false;
+    let userEditingEndTime = false;
+    
+    // Track when user manually edits end time
+    const endTimeInputHandler = () => {
+      userEditingEndTime = true;
+      setTimeout(() => {
+        userEditingEndTime = false;
+      }, 1000);
+    };
+    eventListeners.add(endInput, 'input', endTimeInputHandler);
+    eventListeners.add(endDateInput, 'input', endTimeInputHandler);
+    
+    const syncEndTime = () => {
+      if (isUpdating || userEditingEndTime) return;
+      
+      const startDate = startDateInput.value;
+      const startTime = startInput.value;
+      
+      if (!startDate || !startTime) return;
+      
+      try {
+        isUpdating = true;
+        const startDateTime = combineDateAndTime(startDate, startTime);
+        const start = new Date(startDateTime);
+        
+        if (Number.isNaN(start.getTime())) {
+          isUpdating = false;
+          return;
+        }
+        
+        // Get current end time
+        const endDate = endDateInput.value || startDate;
+        const endTime = endInput.value;
+        const endDateTime = endTime ? combineDateAndTime(endDate, endTime) : null;
+        const end = endDateTime ? new Date(endDateTime) : null;
+        
+        // Calculate duration (default to 1 hour if end time is not set or is before start)
+        let duration = 60 * 60 * 1000; // 1 hour default
+        if (end && end > start) {
+          duration = end.getTime() - start.getTime();
+        }
+        
+        // Set end time to start time + duration
+        const newEnd = new Date(start.getTime() + duration);
+        endDateInput.value = formatDateOnly(newEnd);
+        endInput.value = formatTimeOnly(newEnd);
+      } catch (error) {
+        console.error('Failed to sync end time:', error);
+      } finally {
+        isUpdating = false;
+      }
+    };
+    
+    // Sync when start date or time changes
+    eventListeners.add(startDateInput, 'change', syncEndTime);
+    eventListeners.add(startInput, 'change', syncEndTime);
   }
   
   const dayAllDayContainer = safeGetElementById('dayAllDayContainer');
@@ -4017,11 +4435,17 @@ function setupEventListeners() {
       const title = sanitizeTextInput(formData.get('title') || '');
       const description = sanitizeTextInput(formData.get('description') || '');
       
+      // Combine date and time inputs
+      const startDate = formData.get('startDate') || '';
+      const startTime = formData.get('startTime') || '';
+      const endDate = formData.get('endDate') || '';
+      const endTime = formData.get('endTime') || '';
+      
       const event = {
         title: title,
         description: description,
-        startTime: formData.get('startTime'),
-        endTime: formData.get('endTime'),
+        startTime: combineDateAndTime(startDate, startTime),
+        endTime: combineDateAndTime(endDate, endTime),
         allDay: isAllDay,
         color: formData.get('color'),
         recurrence: (formData.get('recurrence') || 'none'),
@@ -4113,65 +4537,247 @@ function setupEventListeners() {
         
         // Create new event
         // Note: addEvent will generate its own ID, so we don't set id here
-        const newEvent = {
-          title: event.title,
-          description: event.description,
-          startTime: event.startTime,
-          endTime: event.endTime,
-          allDay: event.allDay === true,
-          color: event.color,
-          recurrence: event.recurrence,
-          recurrenceEnd: event.recurrenceEnd,
-          reminderMinutes: event.reminderMinutes,
-          createdAt: new Date().toISOString()
-        };
-        
-        // Save to Firebase (update local array after success)
-        const newId = await addEvent(newEvent);
-        if (!newId) {
-          throw new Error('Failed to add event');
-        }
-        if (!isFirebaseEnabled) {
-          // Add to local array only if Firebase is disabled
-          newEvent.id = newId;
-          events.push(newEvent);
-        }
-      } else if (eventIdToProcess) {
-        // Update existing event
-        // Execute Firebase update first, then update local array after success
-        const updateSuccess = await updateEvent(eventIdToProcess, event);
-        if (!updateSuccess) {
-          throw new Error('Failed to update event');
-        }
-        // Also update local array (may be overwritten by Firebase real-time update, but for immediate UI update)
-        if (Array.isArray(events)) {
-          const eventIndex = events.findIndex(e => e.id === eventIdToProcess);
-          if (eventIndex !== -1) {
-            events[eventIndex] = {
-              ...events[eventIndex],
+        // If recurrence is set, create multiple individual events
+        if (event.recurrence && event.recurrence !== 'none' && event.recurrenceEnd) {
+          const occurrences = generateRecurrenceOccurrences(
+            event.startTime,
+            event.endTime,
+            event.recurrence,
+            event.recurrenceEnd
+          );
+          
+          if (occurrences.length > 0) {
+            // Generate a unique series ID for this recurring event series
+            const recurringSeriesId = generateId();
+            
+            // Create an event for each occurrence
+            let createdCount = 0;
+            for (const occurrence of occurrences) {
+              const occurrenceEvent = {
+                title: event.title,
+                description: event.description,
+                startTime: formatDateTimeLocal(occurrence.startTime),
+                endTime: formatDateTimeLocal(occurrence.endTime),
+                allDay: event.allDay === true,
+                color: event.color,
+                reminderMinutes: event.reminderMinutes,
+                recurringSeriesId: recurringSeriesId, // Link all occurrences together
+              };
+              
+              const newId = await addEvent(occurrenceEvent);
+              if (newId) {
+                createdCount++;
+                if (!isFirebaseEnabled) {
+                  // Add to local array only if Firebase is disabled
+                  const newEvent = { ...occurrenceEvent, id: newId, createdAt: new Date().toISOString() };
+                  events.push(newEvent);
+                }
+              }
+            }
+            
+            if (createdCount === 0) {
+              throw new Error('Failed to create recurring events');
+            }
+          } else {
+            // Fallback: create single event if no occurrences generated
+            const newEvent = {
               title: event.title,
               description: event.description,
               startTime: event.startTime,
               endTime: event.endTime,
               allDay: event.allDay === true,
               color: event.color,
-              recurrence: event.recurrence,
-              recurrenceEnd: event.recurrenceEnd,
               reminderMinutes: event.reminderMinutes,
-              updatedAt: new Date().toISOString()
+              createdAt: new Date().toISOString()
             };
+            
+            const newId = await addEvent(newEvent);
+            if (!newId) {
+              throw new Error('Failed to add event');
+            }
+            if (!isFirebaseEnabled) {
+              newEvent.id = newId;
+              events.push(newEvent);
+            }
+          }
+        } else {
+          // No recurrence: create single event
+          const newEvent = {
+            title: event.title,
+            description: event.description,
+            startTime: event.startTime,
+            endTime: event.endTime,
+            allDay: event.allDay === true,
+            color: event.color,
+            reminderMinutes: event.reminderMinutes,
+            createdAt: new Date().toISOString()
+          };
+          
+          const newId = await addEvent(newEvent);
+          if (!newId) {
+            throw new Error('Failed to add event');
+          }
+          if (!isFirebaseEnabled) {
+            newEvent.id = newId;
+            events.push(newEvent);
+          }
+        }
+      } else if (eventIdToProcess) {
+        // Update existing event
+        const existingEvent = Array.isArray(events) ? events.find(e => e.id === eventIdToProcess) : null;
+        if (!existingEvent) {
+          throw new Error('Event not found');
+        }
+        
+        // Check if bulk operation is requested
+        const recurringSeriesOptions = safeGetElementById('recurringSeriesOptions');
+        const actionType = recurringSeriesOptions && 
+          !recurringSeriesOptions.classList.contains('hidden')
+          ? recurringSeriesOptions.querySelector('input[name="recurringSeriesAction"]:checked')?.value || 'single'
+          : 'single';
+        
+        if (existingEvent.recurringSeriesId) {
+          if (actionType === 'all') {
+            // Bulk update all events in the series
+            const result = await updateRecurringSeries(existingEvent.recurringSeriesId, {
+              title: event.title,
+              description: event.description,
+              color: event.color,
+              reminderMinutes: event.reminderMinutes,
+              // Note: startTime and endTime are not updated in bulk operations
+              // as each occurrence has its own time
+            });
+            
+            if (result.updated === 0) {
+              throw new Error('Failed to update recurring events');
+            }
+          } else if (actionType === 'thisAndFuture') {
+            // Update this event and all subsequent events
+            const result = await updateThisAndSubsequentEvents(eventIdToProcess, existingEvent.recurringSeriesId, {
+              title: event.title,
+              description: event.description,
+              color: event.color,
+              reminderMinutes: event.reminderMinutes,
+              // Note: startTime and endTime are not updated in bulk operations
+              // as each occurrence has its own time
+            });
+            
+            if (result.updated === 0) {
+              throw new Error('Failed to update recurring events');
+            }
+          } else {
+            // Update single event
+            const updateSuccess = await updateEvent(eventIdToProcess, event);
+            if (!updateSuccess) {
+              throw new Error('Failed to update event');
+            }
+            // Also update local array (may be overwritten by Firebase real-time update, but for immediate UI update)
+            if (Array.isArray(events)) {
+              const eventIndex = events.findIndex(e => e.id === eventIdToProcess);
+              if (eventIndex !== -1) {
+                events[eventIndex] = {
+                  ...events[eventIndex],
+                  title: event.title,
+                  description: event.description,
+                  startTime: event.startTime,
+                  endTime: event.endTime,
+                  allDay: event.allDay === true,
+                  color: event.color,
+                  reminderMinutes: event.reminderMinutes,
+                  updatedAt: new Date().toISOString()
+                };
+              }
+            }
+          }
+        } else {
+          // Not a recurring event - update single event
+          const updateSuccess = await updateEvent(eventIdToProcess, event);
+          if (!updateSuccess) {
+            throw new Error('Failed to update event');
+          }
+          // Also update local array (may be overwritten by Firebase real-time update, but for immediate UI update)
+          if (Array.isArray(events)) {
+            const eventIndex = events.findIndex(e => e.id === eventIdToProcess);
+            if (eventIndex !== -1) {
+              events[eventIndex] = {
+                ...events[eventIndex],
+                title: event.title,
+                description: event.description,
+                startTime: event.startTime,
+                endTime: event.endTime,
+                allDay: event.allDay === true,
+                color: event.color,
+                reminderMinutes: event.reminderMinutes,
+                updatedAt: new Date().toISOString()
+              };
+            }
           }
         }
       } else {
         // Create new event
-        const newId = await addEvent(event);
-        if (!newId) {
-          throw new Error('Failed to add event');
-        }
-        if (!isFirebaseEnabled) {
-          // Add to local array only if Firebase is disabled
-          const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
-          events.push(newEvent);
+        // If recurrence is set, create multiple individual events
+        if (event.recurrence && event.recurrence !== 'none' && event.recurrenceEnd) {
+          const occurrences = generateRecurrenceOccurrences(
+            event.startTime,
+            event.endTime,
+            event.recurrence,
+            event.recurrenceEnd
+          );
+          
+          if (occurrences.length > 0) {
+            // Generate a unique series ID for this recurring event series
+            const recurringSeriesId = generateId();
+            
+            // Create an event for each occurrence
+            let createdCount = 0;
+            for (const occurrence of occurrences) {
+              const occurrenceEvent = {
+                title: event.title,
+                description: event.description,
+                startTime: formatDateTimeLocal(occurrence.startTime),
+                endTime: formatDateTimeLocal(occurrence.endTime),
+                allDay: event.allDay,
+                color: event.color,
+                reminderMinutes: event.reminderMinutes,
+                recurringSeriesId: recurringSeriesId, // Link all occurrences together
+              };
+              
+              const newId = await addEvent(occurrenceEvent);
+              if (newId) {
+                createdCount++;
+                if (!isFirebaseEnabled) {
+                  // Add to local array only if Firebase is disabled
+                  const newEvent = { ...occurrenceEvent, id: newId, createdAt: new Date().toISOString() };
+                  events.push(newEvent);
+                }
+              }
+            }
+            
+            if (createdCount === 0) {
+              throw new Error('Failed to create recurring events');
+            }
+          } else {
+            // Fallback: create single event if no occurrences generated
+            const newId = await addEvent(event);
+            if (!newId) {
+              throw new Error('Failed to add event');
+            }
+            if (!isFirebaseEnabled) {
+              const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
+              events.push(newEvent);
+            }
+          }
+        } else {
+          // No recurrence: create single event
+          const newId = await addEvent(event);
+          if (!newId) {
+            throw new Error('Failed to add event');
+          }
+          if (!isFirebaseEnabled) {
+            // Add to local array only if Firebase is disabled
+            const newEvent = { ...event, id: newId, createdAt: new Date().toISOString() };
+            events.push(newEvent);
+          }
         }
       }
       
@@ -4195,8 +4801,29 @@ function setupEventListeners() {
       
       // Save the event ID before closing modal (closeEventModal clears editingEventId)
       const eventIdToDelete = editingEventId;
+      const eventToDelete = Array.isArray(events) ? events.find(e => e.id === eventIdToDelete) : null;
       
-      const confirmed = await showConfirmModal('Are you sure you want to delete this event?', 'Confirm Deletion');
+      if (!eventToDelete) return;
+      
+      // Check if bulk operation is requested
+      const recurringSeriesOptions = safeGetElementById('recurringSeriesOptions');
+      const actionType = recurringSeriesOptions && 
+        !recurringSeriesOptions.classList.contains('hidden')
+        ? recurringSeriesOptions.querySelector('input[name="recurringSeriesAction"]:checked')?.value || 'single'
+        : 'single';
+      
+      let confirmMessage = 'Are you sure you want to delete this event?';
+      if (eventToDelete.recurringSeriesId) {
+        if (actionType === 'all') {
+          const seriesEvents = findRecurringSeriesEvents(eventToDelete.recurringSeriesId);
+          confirmMessage = `Are you sure you want to delete all ${seriesEvents.length} events in this series?`;
+        } else if (actionType === 'thisAndFuture') {
+          const targetEvents = findThisAndSubsequentEvents(eventIdToDelete, eventToDelete.recurringSeriesId);
+          confirmMessage = `Are you sure you want to delete this event and ${targetEvents.length - 1} subsequent event(s)?`;
+        }
+      }
+      
+      const confirmed = await showConfirmModal(confirmMessage, 'Confirm Deletion');
       if (confirmed) {
         // Close event modal immediately after confirmation
         try {
@@ -4214,13 +4841,46 @@ function setupEventListeners() {
         
         try {
           updateCrudStatusIndicator('processing');
-          // Propagate deletions to Google so they don't come back on next sync
-          const deleteSuccess = await deleteEvent(eventIdToDelete);
-          if (!deleteSuccess) {
-            throw new Error('Failed to delete event');
+          
+          if (eventToDelete.recurringSeriesId) {
+            if (actionType === 'all') {
+              // Bulk delete all events in the series
+              const result = await deleteRecurringSeries(eventToDelete.recurringSeriesId);
+              if (result.deleted > 0) {
+                updateCrudStatusIndicator('success');
+                showMessage(`Deleted ${result.deleted} events.`, 'success', 3000);
+              } else {
+                updateCrudStatusIndicator('error');
+                showMessage('Failed to delete events.', 'error', 6000);
+              }
+            } else if (actionType === 'thisAndFuture') {
+              // Delete this event and all subsequent events
+              const result = await deleteThisAndSubsequentEvents(eventIdToDelete, eventToDelete.recurringSeriesId);
+              if (result.deleted > 0) {
+                updateCrudStatusIndicator('success');
+                showMessage(`Deleted ${result.deleted} event(s).`, 'success', 3000);
+              } else {
+                updateCrudStatusIndicator('error');
+                showMessage('Failed to delete events.', 'error', 6000);
+              }
+            } else {
+              // Delete single event
+              const deleteSuccess = await deleteEvent(eventIdToDelete);
+              if (!deleteSuccess) {
+                throw new Error('Failed to delete event');
+              }
+              updateCrudStatusIndicator('success');
+              showMessage('Event deleted', 'success', 3000);
+            }
+          } else {
+            // Not a recurring event - delete single event
+            const deleteSuccess = await deleteEvent(eventIdToDelete);
+            if (!deleteSuccess) {
+              throw new Error('Failed to delete event');
+            }
+            updateCrudStatusIndicator('success');
+            showMessage('Event deleted', 'success', 3000);
           }
-          updateCrudStatusIndicator('success');
-          showMessage('Event deleted', 'success', 3000);
         } catch (error) {
           updateCrudStatusIndicator('error');
           showMessage('Failed to delete event.', 'error', 6000);
@@ -4364,10 +5024,14 @@ function enableDayGridClickToCreate() {
 
     // Open modal with default values
     showEventModal(tempEventId);
+    const startDateInput = safeGetElementById('eventStartDate');
     const startTimeInput = safeGetElementById('eventStartTime');
+    const endDateInput = safeGetElementById('eventEndDate');
     const endTimeInput = safeGetElementById('eventEndTime');
-    if (startTimeInput) startTimeInput.value = formatDateTimeLocal(start);
-    if (endTimeInput) endTimeInput.value = formatDateTimeLocal(end);
+    if (startDateInput) startDateInput.value = formatDateOnly(start);
+    if (startTimeInput) startTimeInput.value = formatTimeOnly(start);
+    if (endDateInput) endDateInput.value = formatDateOnly(end);
+    if (endTimeInput) endTimeInput.value = formatTimeOnly(end);
   }
 }
 

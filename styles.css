@@ -1319,6 +1319,99 @@ body.modal-open {
   cursor: not-allowed;
 }
 
+/* Date picker styling - larger calendar */
+.form-group input[type="date"] {
+  font-size: 1rem;
+  padding: clamp(0.5rem, 1.2vw, 0.625rem) clamp(0.6rem, 1.5vw, 0.75rem);
+  min-height: clamp(2.5rem, 6vw, 3rem);
+  cursor: pointer;
+}
+
+.form-group input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 0.3rem;
+  opacity: 0.7;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  transform: scale(1.2);
+}
+
+.form-group input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  transform: scale(1.3);
+}
+
+/* Make calendar popup larger */
+.form-group input[type="date"]::-webkit-datetime-edit {
+  font-size: 1rem;
+  padding: 0.2rem;
+}
+
+.form-group input[type="date"]::-webkit-datetime-edit-fields-wrapper {
+  font-size: 1rem;
+}
+
+.form-group input[type="date"]::-webkit-datetime-edit-text {
+  padding: 0 0.2rem;
+}
+
+.form-group input[type="date"]::-webkit-datetime-edit-month-field,
+.form-group input[type="date"]::-webkit-datetime-edit-day-field,
+.form-group input[type="date"]::-webkit-datetime-edit-year-field {
+  padding: 0.1rem 0.2rem;
+}
+
+/* Firefox date picker */
+.form-group input[type="date"] {
+  font-size: 1rem;
+}
+
+/* Mobile: Larger date inputs */
+@media screen and (max-width: 768px) {
+  .form-group input[type="date"] {
+    font-size: 1.1rem;
+    min-height: 3rem;
+    padding: 0.7rem 0.8rem;
+  }
+  
+  .form-group input[type="date"]::-webkit-calendar-picker-indicator {
+    font-size: 1.4rem;
+    transform: scale(1.4);
+  }
+}
+
+/* Time quick action buttons */
+.time-quick-actions {
+  display: flex;
+  gap: clamp(0.3rem, 0.8vw, 0.375rem);
+  margin-top: clamp(0.3rem, 0.8vw, 0.375rem);
+  flex-wrap: wrap;
+}
+
+.time-quick-btn {
+  padding: clamp(0.25rem, 0.6vw, 0.3125rem) clamp(0.5rem, 1.2vw, 0.625rem);
+  border: 1px solid var(--border-color);
+  border-radius: clamp(0.25rem, 0.6vw, 0.3125rem);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.time-quick-btn:hover {
+  background-color: rgba(59, 130, 246, 0.1);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.time-quick-btn:active {
+  transform: scale(0.95);
+  background-color: rgba(59, 130, 246, 0.2);
+}
+
 /* Color picker */
 .color-picker {
   display: flex;
@@ -1383,6 +1476,74 @@ body.modal-open {
 .color-picker input[type="radio"]:focus + .color-option {
   outline: 3px solid var(--primary-color);
   outline-offset: 3px;
+}
+
+/* Recurring series options */
+#recurringSeriesOptions {
+  margin-top: clamp(0.75rem, 1.8vw, 1rem);
+  padding-top: clamp(0.75rem, 1.8vw, 1rem);
+  border-top: 2px solid var(--border-color);
+}
+
+.recurring-series-label {
+  display: block;
+  margin-bottom: clamp(0.5rem, 1.2vw, 0.625rem);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  letter-spacing: 0.2px;
+}
+
+.recurring-series-options {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(0.5rem, 1.2vw, 0.625rem);
+  padding: clamp(0.5rem, 1.2vw, 0.625rem);
+  background: rgba(59, 130, 246, 0.04);
+  border-radius: clamp(0.4rem, 1vw, 0.5rem);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+}
+
+.recurring-option-label {
+  display: flex;
+  align-items: center;
+  gap: clamp(0.5rem, 1.2vw, 0.625rem);
+  padding: clamp(0.4rem, 1vw, 0.5rem) clamp(0.5rem, 1.2vw, 0.625rem);
+  border-radius: clamp(0.3rem, 0.8vw, 0.375rem);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  user-select: none;
+}
+
+.recurring-option-label:hover {
+  background-color: rgba(59, 130, 246, 0.08);
+}
+
+.recurring-option-label:has(input:checked) {
+  background-color: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.recurring-option-label input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--primary-color);
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.recurring-option-text {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.recurring-option-label:has(input:checked) .recurring-option-text {
+  font-weight: 600;
+  color: var(--primary-color);
 }
 
 /* Form actions */
