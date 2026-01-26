@@ -277,13 +277,21 @@ function processMutations(calendar, payload) {
     // First try matching by ID
     let eventEntry = scheduleId ? existingMap.scheduleIdMap.get(scheduleId) : null;
     
-    // If ID matching fails, try matching by date and title
+    // If ID matching fails, try matching by comprehensive event properties (title + startTime + endTime + allDay)
     // Use existing events from the map instead of making additional calendar queries
     if (!eventEntry && deleteTitle && deleteStartDate && !Number.isNaN(deleteStartDate.getTime())) {
       // Normalize target date for deletion (compare date part only)
       const targetDate = new Date(deleteStartDate);
       targetDate.setHours(0, 0, 0, 0);
       const targetDateStr = Utilities.formatDate(targetDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      
+      // Get full start and end times for comparison
+      const deleteStartTimeStr = deleteStartDate ? toIsoString(deleteStartDate) : '';
+      const deleteEndDate = rawDeleteItem && typeof rawDeleteItem === 'object' && rawDeleteItem.endTime 
+        ? new Date(rawDeleteItem.endTime) 
+        : null;
+      const deleteEndTimeStr = deleteEndDate && !Number.isNaN(deleteEndDate.getTime()) ? toIsoString(deleteEndDate) : '';
+      const deleteAllDayKey = isAllDay ? '1' : '0';
       
       // Search through already-fetched existing events instead of making new queries
       const normalizedDeleteTitle = normalizeTitleForComparison(deleteTitle);
@@ -311,10 +319,31 @@ function processMutations(calendar, payload) {
         eventStartDate.setHours(0, 0, 0, 0);
         const eventDateStr = Utilities.formatDate(eventStartDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
         
-        // When date matches
+        // When date matches, also check startTime, endTime, and allDay status
         if (eventDateStr === targetDateStr) {
-          eventEntry = existingEvent;
-          break;
+          // Get full start and end times for comparison
+          let eventStartTimeStr = '';
+          let eventEndTimeStr = '';
+          if (existingEvent.isAllDayEvent()) {
+            const startDate = existingEvent.getAllDayStartDate();
+            const endDate = existingEvent.getAllDayEndDate();
+            eventStartTimeStr = startDate ? toIsoString(startDate) : '';
+            eventEndTimeStr = endDate ? toIsoString(endDate) : '';
+          } else {
+            const startTime = existingEvent.getStartTime();
+            const endTime = existingEvent.getEndTime();
+            eventStartTimeStr = startTime ? toIsoString(startTime) : '';
+            eventEndTimeStr = endTime ? toIsoString(endTime) : '';
+          }
+          const eventAllDayKey = existingEvent.isAllDayEvent() ? '1' : '0';
+          
+          // Match only if startTime, endTime, and allDay status also match
+          if (eventStartTimeStr === deleteStartTimeStr && 
+              eventEndTimeStr === deleteEndTimeStr && 
+              eventAllDayKey === deleteAllDayKey) {
+            eventEntry = existingEvent;
+            break;
+          }
         }
       }
     }
@@ -558,42 +587,77 @@ function clearCalendarEvents() {
   });
 }
 
-// Remove duplicate events in Google Calendar (events with same date and name)
+// Build a comprehensive key for Google Calendar events that includes more properties
+function buildGoogleEventKey(event) {
+  if (!event) return null;
+  
+  const title = event.getTitle() || '';
+  const normalizedTitle = normalizeTitleForComparison(title);
+  
+  // Get date part (YYYY-MM-DD format)
+  let eventDate;
+  if (event.isAllDayEvent()) {
+    eventDate = event.getAllDayStartDate();
+  } else {
+    eventDate = event.getStartTime();
+  }
+  const dateStr = Utilities.formatDate(eventDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  
+  // Get full start time (ISO string)
+  let startTimeStr = '';
+  if (event.isAllDayEvent()) {
+    const startDate = event.getAllDayStartDate();
+    startTimeStr = startDate ? toIsoString(startDate) : '';
+  } else {
+    const startTime = event.getStartTime();
+    startTimeStr = startTime ? toIsoString(startTime) : '';
+  }
+  
+  // Get full end time (ISO string)
+  let endTimeStr = '';
+  if (event.isAllDayEvent()) {
+    const endDate = event.getAllDayEndDate();
+    endTimeStr = endDate ? toIsoString(endDate) : '';
+  } else {
+    const endTime = event.getEndTime();
+    endTimeStr = endTime ? toIsoString(endTime) : '';
+  }
+  
+  // Get description (normalized)
+  const description = event.getDescription() || '';
+  const normalizedDescription = normalizeTitleForComparison(description);
+  
+  // Get all-day status
+  const allDayKey = event.isAllDayEvent() ? '1' : '0';
+  
+  // Build comprehensive key: date|title|startTime|endTime|description|allDay
+  return `${dateStr}|${normalizedTitle}|${startTimeStr}|${endTimeStr}|${normalizedDescription}|${allDayKey}`;
+}
+
+// Remove duplicate events in Google Calendar (events must match title, startTime, endTime, description, and allDay status)
 function deduplicateGoogleCalendarEvents(events) {
   if (!events || events.length === 0) {
     return { deleted: 0, deletedEventIds: [] };
   }
 
-  // Group by date and title
-  const eventsByDateTitle = new Map();
+  // Group by comprehensive key (date + title + startTime + endTime + description + allDay)
+  const eventsByKey = new Map();
   
   events.forEach((event) => {
-    const title = event.getTitle() || '';
-    const normalizedTitle = normalizeTitleForComparison(title);
+    const key = buildGoogleEventKey(event);
+    if (!key) return;
     
-    // Get start date (getAllDayStartDate for all-day events, getStartTime otherwise)
-    let eventDate;
-    if (event.isAllDayEvent()) {
-      eventDate = event.getAllDayStartDate();
-    } else {
-      eventDate = event.getStartTime();
+    if (!eventsByKey.has(key)) {
+      eventsByKey.set(key, []);
     }
-    
-    // Get date part only (YYYY-MM-DD format)
-    const dateStr = Utilities.formatDate(eventDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-    const key = `${dateStr}|${normalizedTitle}`;
-    
-    if (!eventsByDateTitle.has(key)) {
-      eventsByDateTitle.set(key, []);
-    }
-    eventsByDateTitle.get(key).push(event);
+    eventsByKey.get(key).push(event);
   });
 
   let deleted = 0;
   const deletedEventIds = [];
 
   // Check duplicates in each group
-  eventsByDateTitle.forEach((duplicates, key) => {
+  eventsByKey.forEach((duplicates, key) => {
     if (duplicates.length <= 1) return; // No duplicates
 
     // Keep the latest event (newest lastUpdated)
