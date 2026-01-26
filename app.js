@@ -146,27 +146,6 @@ function showConfirmModal(message, title = 'Confirm') {
     // Control body overflow to prevent scrollbar on mobile (CSS class only)
     document.body.classList.add('modal-open');
     
-    // #region agent log
-    setTimeout(() => {
-      const modalContent = modal.querySelector('.modal-content');
-      const confirmContent = modal.querySelector('.confirm-modal-content');
-      const formActions = modal.querySelector('.form-actions');
-      const header = modal.querySelector('.modal-header');
-      const body = modal.querySelector('.confirm-body');
-      if (modalContent && confirmContent && formActions && header && body) {
-        const modalRect = modalContent.getBoundingClientRect();
-        const confirmRect = confirmContent.getBoundingClientRect();
-        const actionsRect = formActions.getBoundingClientRect();
-        const headerRect = header.getBoundingClientRect();
-        const bodyRect = body.getBoundingClientRect();
-        const modalStyle = getComputedStyle(modalContent);
-        const confirmStyle = getComputedStyle(confirmContent);
-        const actionsStyle = getComputedStyle(formActions);
-        fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:144',message:'Confirm modal dimensions POST-FIX v2',data:{modalHeight:modalRect.height,modalMaxHeight:modalStyle.maxHeight,modalOverflow:modalStyle.overflow,confirmHeight:confirmRect.height,confirmMaxHeight:confirmStyle.maxHeight,confirmOverflow:confirmStyle.overflow,confirmDisplay:confirmStyle.display,actionsTop:actionsRect.top,actionsBottom:actionsRect.bottom,confirmBottom:confirmRect.bottom,headerHeight:headerRect.height,bodyHeight:bodyRect.height,actionsHeight:actionsRect.height,actionsFlexShrink:actionsStyle.flexShrink,actionsFlexGrow:actionsStyle.flexGrow,viewportHeight:window.innerHeight,actionsOverflow:actionsRect.bottom>confirmRect.bottom,overflowAmount:actionsRect.bottom-confirmRect.bottom},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix-v2',hypothesisId:'B'})}).catch(()=>{});
-      }
-    }, 100);
-    // #endregion
-    
     let escHandler = null;
     
     const cleanup = () => {
