@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Icon Generator</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            padding: 40px;
+            background: #f8fafc;
+        }
+        .icon-preview {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+            margin: 30px 0;
+        }
+        .preview-item {
+            text-align: center;
+            padding: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .preview-item img {
+            display: block;
+            margin: 0 auto 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        h1 { color: #0f172a; }
+        .instructions {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 30px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <h1>📅 Schedule Manager Icon</h1>
+    
+    <div class="icon-preview">
+        <div class="preview-item">
+            <img src="icon.svg" width="32" height="32" alt="32x32">
+            <div>32x32</div>
+        </div>
+        <div class="preview-item">
+            <img src="icon.svg" width="64" height="64" alt="64x64">
+            <div>64x64</div>
+        </div>
+        <div class="preview-item">
+            <img src="icon.svg" width="128" height="128" alt="128x128">
+            <div>128x128</div>
+        </div>
+        <div class="preview-item">
+            <img src="icon.svg" width="180" height="180" alt="180x180">
+            <div>180x180 (iOS)</div>
+        </div>
+        <div class="preview-item">
+            <img src="icon.svg" width="192" height="192" alt="192x192">
+            <div>192x192</div>
+        </div>
+        <div class="preview-item">
+            <img src="icon.svg" width="512" height="512" alt="512x512">
+            <div>512x512</div>
+        </div>
+    </div>
+    
+    <div class="instructions">
+        <h2>Icon Created Successfully! ✅</h2>
+        <p>The SVG icon has been created and added to your HTML. Modern browsers will use the SVG version automatically.</p>
+        <p><strong>For PNG versions:</strong> You can convert the SVG to PNG using:</p>
+        <ul>
+            <li>Online tools like <a href="https://cloudconvert.com/svg-to-png" target="_blank">CloudConvert</a></li>
+            <li>Design tools like Figma, Sketch, or Adobe Illustrator</li>
+            <li>Command line: <code>rsvg-convert icon.svg -w 192 -h 192 -o icon-192.png</code></li>
+        </ul>
+        <p><strong>Current setup:</strong> The HTML now references icon.svg which works perfectly in modern browsers. The PNG references are optional for older browser support.</p>
+    </div>
+</body>
+</html>

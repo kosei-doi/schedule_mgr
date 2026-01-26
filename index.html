@@ -8,11 +8,19 @@
     <meta http-equiv="Expires" content="0">
     <title>Schedule Manager</title>
 
+    <!-- Favicon and App Icons -->
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+    
     <!-- iOS App Configuration -->
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="Schedule">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="application-name" content="Schedule Manager">
+    <meta name="theme-color" content="#6366f1">
 
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -312,35 +320,25 @@
                             <label for="eventTitle">Title *</label>
                             <input type="text" id="eventTitle" name="title" required maxlength="100" aria-required="true">
                         </div>
-                        <div class="form-row compact-row" id="timeInputRow">
-                            <div class="form-group compact">
-                                <label for="eventStartDate">Start Date *</label>
-                                <input type="date" id="eventStartDate" name="startDate" required aria-required="true">
-                            </div>
-                            <div class="form-group compact">
-                                <label for="eventStartTime">Start Time *</label>
-                                <input type="time" id="eventStartTime" name="startTime" required aria-required="true" step="900">
-                                <div class="time-quick-actions">
-                                    <button type="button" class="time-quick-btn" data-action="now-start">Now</button>
-                                    <button type="button" class="time-quick-btn" data-action="preset-start" data-time="09:00">9:00</button>
-                                    <button type="button" class="time-quick-btn" data-action="preset-start" data-time="12:00">12:00</button>
-                                    <button type="button" class="time-quick-btn" data-action="preset-start" data-time="17:00">17:00</button>
+                        <div class="form-group compact" id="timeInputRow">
+                            <label for="eventStartDate">Start Date & Time *</label>
+                            <div class="datetime-input-group">
+                                <input type="date" id="eventStartDate" name="startDate" required aria-required="true" class="date-input">
+                                <div class="time-input-group">
+                                    <input type="number" id="eventStartHour" name="startHour" required aria-required="true" class="time-input" min="0" max="23" step="1" placeholder="HH">
+                                    <span class="time-separator">:</span>
+                                    <input type="number" id="eventStartMinute" name="startMinute" required aria-required="true" class="time-input" min="0" max="45" step="15" placeholder="MM">
                                 </div>
                             </div>
                         </div>
-                        <div class="form-row compact-row" id="endTimeInputRow">
-                            <div class="form-group compact">
-                                <label for="eventEndDate">End Date *</label>
-                                <input type="date" id="eventEndDate" name="endDate" required aria-required="true">
-                            </div>
-                            <div class="form-group compact">
-                                <label for="eventEndTime">End Time *</label>
-                                <input type="time" id="eventEndTime" name="endTime" required aria-required="true" step="900">
-                                <div class="time-quick-actions">
-                                    <button type="button" class="time-quick-btn" data-action="now-end">Now</button>
-                                    <button type="button" class="time-quick-btn" data-action="preset-end" data-time="12:00">12:00</button>
-                                    <button type="button" class="time-quick-btn" data-action="preset-end" data-time="17:00">17:00</button>
-                                    <button type="button" class="time-quick-btn" data-action="preset-end" data-time="20:00">20:00</button>
+                        <div class="form-group compact">
+                            <label for="eventEndDate">End Date & Time *</label>
+                            <div class="datetime-input-group">
+                                <input type="date" id="eventEndDate" name="endDate" required aria-required="true" class="date-input">
+                                <div class="time-input-group">
+                                    <input type="number" id="eventEndHour" name="endHour" required aria-required="true" class="time-input" min="0" max="23" step="1" placeholder="HH">
+                                    <span class="time-separator">:</span>
+                                    <input type="number" id="eventEndMinute" name="endMinute" required aria-required="true" class="time-input" min="0" max="45" step="15" placeholder="MM">
                                 </div>
                             </div>
                         </div>

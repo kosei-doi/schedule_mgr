@@ -146,6 +146,27 @@ function showConfirmModal(message, title = 'Confirm') {
     // Control body overflow to prevent scrollbar on mobile (CSS class only)
     document.body.classList.add('modal-open');
     
+    // #region agent log
+    setTimeout(() => {
+      const modalContent = modal.querySelector('.modal-content');
+      const confirmContent = modal.querySelector('.confirm-modal-content');
+      const formActions = modal.querySelector('.form-actions');
+      const header = modal.querySelector('.modal-header');
+      const body = modal.querySelector('.confirm-body');
+      if (modalContent && confirmContent && formActions && header && body) {
+        const modalRect = modalContent.getBoundingClientRect();
+        const confirmRect = confirmContent.getBoundingClientRect();
+        const actionsRect = formActions.getBoundingClientRect();
+        const headerRect = header.getBoundingClientRect();
+        const bodyRect = body.getBoundingClientRect();
+        const modalStyle = getComputedStyle(modalContent);
+        const confirmStyle = getComputedStyle(confirmContent);
+        const actionsStyle = getComputedStyle(formActions);
+        fetch('http://127.0.0.1:7242/ingest/a7a35723-98f4-4fdc-97d1-918ef4e0983c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app.js:144',message:'Confirm modal dimensions POST-FIX v2',data:{modalHeight:modalRect.height,modalMaxHeight:modalStyle.maxHeight,modalOverflow:modalStyle.overflow,confirmHeight:confirmRect.height,confirmMaxHeight:confirmStyle.maxHeight,confirmOverflow:confirmStyle.overflow,confirmDisplay:confirmStyle.display,actionsTop:actionsRect.top,actionsBottom:actionsRect.bottom,confirmBottom:confirmRect.bottom,headerHeight:headerRect.height,bodyHeight:bodyRect.height,actionsHeight:actionsRect.height,actionsFlexShrink:actionsStyle.flexShrink,actionsFlexGrow:actionsStyle.flexGrow,viewportHeight:window.innerHeight,actionsOverflow:actionsRect.bottom>confirmRect.bottom,overflowAmount:actionsRect.bottom-confirmRect.bottom},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix-v2',hypothesisId:'B'})}).catch(()=>{});
+      }
+    }, 100);
+    // #endregion
+    
     let escHandler = null;
     
     const cleanup = () => {
@@ -2699,40 +2720,55 @@ function showEventModal(eventId = null) {
   const form = safeGetElementById('eventForm');
   const deleteBtn = safeGetElementById('deleteBtn');
   const saveBtn = form?.querySelector('button[type="submit"]');
-  const startInput = safeGetElementById('eventStartTime');
-  const endInput = safeGetElementById('eventEndTime');
   const startDateInput = safeGetElementById('eventStartDate');
+  const startHourInput = safeGetElementById('eventStartHour');
+  const startMinuteInput = safeGetElementById('eventStartMinute');
   const endDateInput = safeGetElementById('eventEndDate');
+  const endHourInput = safeGetElementById('eventEndHour');
+  const endMinuteInput = safeGetElementById('eventEndMinute');
   const allDayCheckbox = safeGetElementById('eventAllDay');
   const allDayRow = safeGetElementById('allDayDateRow');
   const allDayStartInput = safeGetElementById('eventAllDayStart');
   const allDayEndInput = safeGetElementById('eventAllDayEnd');
   
   // Check required elements
-  if (!modal || !modalTitle || !form || !startInput || !endInput || !startDateInput || !endDateInput) {
+  if (!modal || !modalTitle || !form || !startDateInput || !startHourInput || !startMinuteInput || 
+      !endDateInput || !endHourInput || !endMinuteInput) {
     return;
   }
   
-  const allDayControls = { startInput, endInput, allDayRow };
+  const allDayControls = { 
+    startInput: startDateInput, 
+    endInput: endDateInput, 
+    allDayRow,
+    startHourInput,
+    startMinuteInput,
+    endHourInput,
+    endMinuteInput
+  };
   
   editingEventId = eventId;
   
   const resetTimeInputs = () => {
-    if (startInput) {
-      startInput.disabled = false;
-      startInput.classList.remove('readonly-input');
-    }
-    if (endInput) {
-      endInput.disabled = false;
-      endInput.classList.remove('readonly-input');
-    }
     if (startDateInput) {
       startDateInput.disabled = false;
       startDateInput.classList.remove('readonly-input');
     }
+    if (startHourInput) {
+      startHourInput.disabled = false;
+    }
+    if (startMinuteInput) {
+      startMinuteInput.disabled = false;
+    }
     if (endDateInput) {
       endDateInput.disabled = false;
       endDateInput.classList.remove('readonly-input');
+    }
+    if (endHourInput) {
+      endHourInput.disabled = false;
+    }
+    if (endMinuteInput) {
+      endMinuteInput.disabled = false;
     }
     if (allDayCheckbox) {
       allDayCheckbox.checked = false;
@@ -2779,13 +2815,9 @@ function showEventModal(eventId = null) {
     const descInput = safeGetElementById('eventDescription');
     if (descInput) descInput.value = event.description || '';
     
-    // Split datetime into date and time
-    const startDateTime = splitDateTime(event.startTime);
-    const endDateTime = splitDateTime(event.endTime);
-    if (startDateInput) startDateInput.value = startDateTime.date;
-    if (startInput) startInput.value = startDateTime.time;
-    if (endDateInput) endDateInput.value = endDateTime.date;
-    if (endInput) endInput.value = endDateTime.time;
+    // Set datetime inputs
+    setDateTimeFromISO(startDateInput, startHourInput, startMinuteInput, event.startTime);
+    setDateTimeFromISO(endDateInput, endHourInput, endMinuteInput, event.endTime || event.startTime);
     
     if (allDayCheckbox) {
       const isAllDay = isAllDayEvent(event);
@@ -2844,48 +2876,42 @@ function showEventModal(eventId = null) {
     const defaultColorRadio = document.querySelector('input[name="color"][value="#3b82f6"]');
     if (defaultColorRadio) defaultColorRadio.checked = true;
     
-    // Keep existing values for temporary events
-    if (eventId && typeof eventId === 'string' && eventId.startsWith('temp-')) {
-      if (!Array.isArray(events)) return;
-      const event = events.find(e => e.id === eventId);
-      if (event) {
-        const descInput = safeGetElementById('eventDescription');
-        if (descInput) descInput.value = event.description || '';
-        
-        // Split datetime into date and time
-        const startDateTime = splitDateTime(event.startTime);
-        const endDateTime = splitDateTime(event.endTime);
-        if (startDateInput) startDateInput.value = startDateTime.date;
-        if (startInput) startInput.value = startDateTime.time;
-        if (endDateInput) endDateInput.value = endDateTime.date;
-        if (endInput) endInput.value = endDateTime.time;
-        
-        if (allDayCheckbox) {
-          const isAllDay = isAllDayEvent(event);
-          allDayCheckbox.checked = isAllDay;
-          if (isAllDay) {
-            if (allDayStartInput) allDayStartInput.value = formatDateOnly(event.startTime);
-            if (allDayEndInput) allDayEndInput.value = formatDateOnly(event.endTime || event.startTime);
+      // Keep existing values for temporary events
+      if (eventId && typeof eventId === 'string' && eventId.startsWith('temp-')) {
+        if (!Array.isArray(events)) return;
+        const event = events.find(e => e.id === eventId);
+        if (event) {
+          const descInput = safeGetElementById('eventDescription');
+          if (descInput) descInput.value = event.description || '';
+          
+          // Set datetime inputs
+          setDateTimeFromISO(startDateInput, startHourInput, startMinuteInput, event.startTime);
+          setDateTimeFromISO(endDateInput, endHourInput, endMinuteInput, event.endTime || event.startTime);
+          
+          if (allDayCheckbox) {
+            const isAllDay = isAllDayEvent(event);
+            allDayCheckbox.checked = isAllDay;
+            if (isAllDay) {
+              if (allDayStartInput) allDayStartInput.value = formatDateOnly(event.startTime);
+              if (allDayEndInput) allDayEndInput.value = formatDateOnly(event.endTime || event.startTime);
+            }
+            applyAllDayMode(isAllDay, allDayControls);
           }
-          applyAllDayMode(isAllDay, allDayControls);
+          
+          // Set color
+          const colorRadio = document.querySelector(`input[name="color"][value="${event.color}"]`);
+          if (colorRadio) colorRadio.checked = true;
         }
+      } else {
+        // Set default datetime values (current date/time, rounded to nearest 15 minutes)
+        const now = new Date();
+        const roundedMinutes = Math.round(now.getMinutes() / 15) * 15;
+        const defaultStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), roundedMinutes);
+        const defaultEnd = new Date(defaultStart.getTime() + 60 * 60 * 1000); // 1 hour later
         
-        // Set color
-        const colorRadio = document.querySelector(`input[name="color"][value="${event.color}"]`);
-        if (colorRadio) colorRadio.checked = true;
+        setDateTimeFromISO(startDateInput, startHourInput, startMinuteInput, defaultStart.toISOString());
+        setDateTimeFromISO(endDateInput, endHourInput, endMinuteInput, defaultEnd.toISOString());
       }
-    } else {
-      // Set default values (next hour from current date)
-      const now = new Date();
-      const startTime = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour later
-      startTime.setMinutes(0);
-      const endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 more hour later
-      
-      if (startDateInput) startDateInput.value = formatDateOnly(startTime);
-      if (startInput) startInput.value = formatTimeOnly(startTime);
-      if (endDateInput) endDateInput.value = formatDateOnly(endTime);
-      if (endInput) endInput.value = formatTimeOnly(endTime);
-    }
     if (allDayCheckbox) {
       allDayCheckbox.checked = false;
       applyAllDayMode(false, allDayControls);
@@ -3360,7 +3386,7 @@ function formatTime(dateTimeString) {
   return `${hours}:${minutes}`;
 }
 
-// Format for datetime-local
+// Format for datetime-local (kept for backward compatibility)
 function formatDateTimeLocal(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
   const year = date.getFullYear();
@@ -3377,6 +3403,44 @@ function toDateTimeLocalValue(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return formatDateTimeLocal(date);
+}
+
+// Helper functions for date + time number inputs
+function setDateTimeFromISO(dateInput, hourInput, minuteInput, isoString) {
+  if (!isoString) return;
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return;
+  
+  if (dateInput) {
+    dateInput.value = formatDateOnly(date);
+  }
+  if (hourInput) {
+    hourInput.value = date.getHours();
+  }
+  if (minuteInput) {
+    // Round to nearest 15 minutes
+    const minutes = date.getMinutes();
+    const roundedMinutes = Math.round(minutes / 15) * 15;
+    minuteInput.value = roundedMinutes;
+  }
+}
+
+function getDateTimeAsISO(dateInput, hourInput, minuteInput) {
+  if (!dateInput || !hourInput || !minuteInput) return '';
+  if (!dateInput.value || hourInput.value === '' || minuteInput.value === '') return '';
+  
+  const dateStr = dateInput.value;
+  const hour = parseInt(hourInput.value, 10);
+  const minute = parseInt(minuteInput.value, 10);
+  
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return '';
+  if (hour < 0 || hour > 23) return '';
+  if (minute < 0 || minute > 59) return '';
+  
+  const date = new Date(`${dateStr}T${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`);
+  if (Number.isNaN(date.getTime())) return '';
+  
+  return date.toISOString();
 }
 
 function formatDateOnly(value) {
@@ -3442,7 +3506,7 @@ function splitEventsByAllDay(eventList = []) {
 }
 
 function applyAllDayMode(isAllDay, controls) {
-  const { startInput, endInput, allDayRow } = controls;
+  const { startInput, endInput, allDayRow, startHourInput, startMinuteInput, endHourInput, endMinuteInput } = controls;
   const allDayStartInput = safeGetElementById('eventAllDayStart');
   const allDayEndInput = safeGetElementById('eventAllDayEnd');
   if (isAllDay) {
@@ -3451,6 +3515,10 @@ function applyAllDayMode(isAllDay, controls) {
     endInput?.classList.add('readonly-input');
     startInput?.setAttribute('disabled', 'disabled');
     endInput?.setAttribute('disabled', 'disabled');
+    startHourInput?.setAttribute('disabled', 'disabled');
+    startMinuteInput?.setAttribute('disabled', 'disabled');
+    endHourInput?.setAttribute('disabled', 'disabled');
+    endMinuteInput?.setAttribute('disabled', 'disabled');
     allDayStartInput?.removeAttribute('disabled');
     allDayEndInput?.removeAttribute('disabled');
   } else {
@@ -3459,6 +3527,10 @@ function applyAllDayMode(isAllDay, controls) {
     endInput?.classList.remove('readonly-input');
     startInput?.removeAttribute('disabled');
     endInput?.removeAttribute('disabled');
+    startHourInput?.removeAttribute('disabled');
+    startMinuteInput?.removeAttribute('disabled');
+    endHourInput?.removeAttribute('disabled');
+    endMinuteInput?.removeAttribute('disabled');
     allDayStartInput?.setAttribute('disabled', 'disabled');
     allDayEndInput?.setAttribute('disabled', 'disabled');
   }
@@ -4169,10 +4241,12 @@ function setupEventListeners() {
     eventListeners.add(monthViewBtn, 'click', handler);
   }
   
-  const startInput = safeGetElementById('eventStartTime');
-  const endInput = safeGetElementById('eventEndTime');
   const startDateInput = safeGetElementById('eventStartDate');
+  const startHourInput = safeGetElementById('eventStartHour');
+  const startMinuteInput = safeGetElementById('eventStartMinute');
   const endDateInput = safeGetElementById('eventEndDate');
+  const endHourInput = safeGetElementById('eventEndHour');
+  const endMinuteInput = safeGetElementById('eventEndMinute');
   const allDayCheckbox = safeGetElementById('eventAllDay');
   const allDayRow = safeGetElementById('allDayDateRow');
   const allDayStartInput = safeGetElementById('eventAllDayStart');
@@ -4183,12 +4257,23 @@ function setupEventListeners() {
       try {
       if (allDayCheckbox.disabled) return;
       const isAllDay = allDayCheckbox.checked;
-      applyAllDayMode(isAllDay, { startInput, endInput, allDayRow });
+      applyAllDayMode(isAllDay, { 
+        startInput: startDateInput, 
+        endInput: endDateInput, 
+        allDayRow,
+        startHourInput,
+        startMinuteInput,
+        endHourInput,
+        endMinuteInput
+      });
       if (isAllDay) {
         if (allDayStartInput && !allDayStartInput.value) {
-          const sourceDate = startDateInput?.value || formatDateOnly(new Date());
-          const sourceTime = startInput?.value || formatTimeOnly(new Date());
-          allDayStartInput.value = sourceDate || formatDateOnly(new Date());
+          const startISO = getDateTimeAsISO(startDateInput, startHourInput, startMinuteInput);
+          if (startISO) {
+            allDayStartInput.value = formatDateOnly(startISO);
+          } else {
+            allDayStartInput.value = formatDateOnly(new Date());
+          }
         }
         if (allDayEndInput && !allDayEndInput.value) {
           allDayEndInput.value = allDayStartInput.value;
@@ -4201,54 +4286,39 @@ function setupEventListeners() {
     eventListeners.add(allDayCheckbox, 'change', handler);
   }
   
-  // Time quick action buttons
-  if (startDateInput && startInput && endDateInput && endInput) {
-    const timeQuickButtons = document.querySelectorAll('.time-quick-btn');
-    if (timeQuickButtons.length > 0) {
-      timeQuickButtons.forEach(btn => {
-        const handler = () => {
-          try {
-            const action = btn.dataset.action;
-            
-            const now = new Date();
-            
-            if (action === 'now-start') {
-              startDateInput.value = formatDateOnly(now);
-              startInput.value = formatTimeOnly(now);
-              // Auto-set end time to 1 hour later
-              const endTime = new Date(now.getTime() + 60 * 60 * 1000);
-              endDateInput.value = formatDateOnly(endTime);
-              endInput.value = formatTimeOnly(endTime);
-            } else if (action === 'now-end') {
-              endDateInput.value = formatDateOnly(now);
-              endInput.value = formatTimeOnly(now);
-            } else if (action === 'preset-start') {
-              const presetTime = btn.dataset.time || '09:00';
-              startInput.value = presetTime;
-              // Auto-set end time to 1 hour later
-              const startDate = startDateInput.value || formatDateOnly(now);
-              const startDateTime = combineDateAndTime(startDate, presetTime);
-              const start = new Date(startDateTime);
-              if (!Number.isNaN(start.getTime())) {
-                const endTime = new Date(start.getTime() + 60 * 60 * 1000);
-                endDateInput.value = formatDateOnly(endTime);
-                endInput.value = formatTimeOnly(endTime);
-              }
-            } else if (action === 'preset-end') {
-              const presetTime = btn.dataset.time || '17:00';
-              endInput.value = presetTime;
-            }
-          } catch (error) {
-            console.error('Failed to set quick time:', error);
-          }
-        };
-        eventListeners.add(btn, 'click', handler);
-      });
-    }
-    
-    // Auto-sync end time when start time changes
+  // Auto-sync end time when start time changes
+  if (startDateInput && startHourInput && startMinuteInput && endDateInput && endHourInput && endMinuteInput) {
     let isUpdating = false;
     let userEditingEndTime = false;
+    
+    // Validate and round minute inputs to 15-minute increments
+    const validateMinuteInput = (input) => {
+      if (!input || !input.value) return;
+      const value = parseInt(input.value, 10);
+      if (!Number.isNaN(value)) {
+        // Round to nearest 15 minutes
+        const rounded = Math.round(value / 15) * 15;
+        if (rounded < 0) input.value = 0;
+        else if (rounded > 45) input.value = 45;
+        else input.value = rounded;
+      }
+    };
+    
+    // Validate hour inputs (0-23)
+    const validateHourInput = (input) => {
+      if (!input || !input.value) return;
+      const value = parseInt(input.value, 10);
+      if (!Number.isNaN(value)) {
+        if (value < 0) input.value = 0;
+        else if (value > 23) input.value = 23;
+      }
+    };
+    
+    // Add validation listeners
+    eventListeners.add(startMinuteInput, 'blur', () => validateMinuteInput(startMinuteInput));
+    eventListeners.add(endMinuteInput, 'blur', () => validateMinuteInput(endMinuteInput));
+    eventListeners.add(startHourInput, 'blur', () => validateHourInput(startHourInput));
+    eventListeners.add(endHourInput, 'blur', () => validateHourInput(endHourInput));
     
     // Track when user manually edits end time
     const endTimeInputHandler = () => {
@@ -4257,53 +4327,37 @@ function setupEventListeners() {
         userEditingEndTime = false;
       }, 1000);
     };
-    eventListeners.add(endInput, 'input', endTimeInputHandler);
-    eventListeners.add(endDateInput, 'input', endTimeInputHandler);
+    eventListeners.add(endDateInput, 'change', endTimeInputHandler);
+    eventListeners.add(endHourInput, 'input', endTimeInputHandler);
+    eventListeners.add(endMinuteInput, 'input', endTimeInputHandler);
     
     const syncEndTime = () => {
       if (isUpdating || userEditingEndTime) return;
       
-      const startDate = startDateInput.value;
-      const startTime = startInput.value;
+      const startISO = getDateTimeAsISO(startDateInput, startHourInput, startMinuteInput);
+      if (!startISO) return;
       
-      if (!startDate || !startTime) return;
+      const startDate = new Date(startISO);
+      if (Number.isNaN(startDate.getTime())) return;
       
-      try {
-        isUpdating = true;
-        const startDateTime = combineDateAndTime(startDate, startTime);
-        const start = new Date(startDateTime);
-        
-        if (Number.isNaN(start.getTime())) {
-          isUpdating = false;
-          return;
+      // Get current end time to preserve duration
+      const endISO = getDateTimeAsISO(endDateInput, endHourInput, endMinuteInput);
+      let duration = 60 * 60 * 1000; // Default 1 hour
+      if (endISO) {
+        const endDate = new Date(endISO);
+        if (!Number.isNaN(endDate.getTime()) && endDate > startDate) {
+          duration = endDate.getTime() - startDate.getTime();
         }
-        
-        // Get current end time
-        const endDate = endDateInput.value || startDate;
-        const endTime = endInput.value;
-        const endDateTime = endTime ? combineDateAndTime(endDate, endTime) : null;
-        const end = endDateTime ? new Date(endDateTime) : null;
-        
-        // Calculate duration (default to 1 hour if end time is not set or is before start)
-        let duration = 60 * 60 * 1000; // 1 hour default
-        if (end && end > start) {
-          duration = end.getTime() - start.getTime();
-        }
-        
-        // Set end time to start time + duration
-        const newEnd = new Date(start.getTime() + duration);
-        endDateInput.value = formatDateOnly(newEnd);
-        endInput.value = formatTimeOnly(newEnd);
-      } catch (error) {
-        console.error('Failed to sync end time:', error);
-      } finally {
-        isUpdating = false;
       }
+      
+      // Set end time maintaining duration
+      const newEnd = new Date(startDate.getTime() + duration);
+      setDateTimeFromISO(endDateInput, endHourInput, endMinuteInput, newEnd.toISOString());
     };
     
-    // Sync when start date or time changes
     eventListeners.add(startDateInput, 'change', syncEndTime);
-    eventListeners.add(startInput, 'change', syncEndTime);
+    eventListeners.add(startHourInput, 'input', syncEndTime);
+    eventListeners.add(startMinuteInput, 'input', syncEndTime);
   }
   
   const dayAllDayContainer = safeGetElementById('dayAllDayContainer');
@@ -4435,17 +4489,26 @@ function setupEventListeners() {
       const title = sanitizeTextInput(formData.get('title') || '');
       const description = sanitizeTextInput(formData.get('description') || '');
       
-      // Combine date and time inputs
+      // Get date + time input values and convert to ISO format
       const startDate = formData.get('startDate') || '';
-      const startTime = formData.get('startTime') || '';
+      const startHour = formData.get('startHour') || '';
+      const startMinute = formData.get('startMinute') || '';
       const endDate = formData.get('endDate') || '';
-      const endTime = formData.get('endTime') || '';
+      const endHour = formData.get('endHour') || '';
+      const endMinute = formData.get('endMinute') || '';
+      
+      const startDateInput = safeGetElementById('eventStartDate');
+      const startHourInput = safeGetElementById('eventStartHour');
+      const startMinuteInput = safeGetElementById('eventStartMinute');
+      const endDateInput = safeGetElementById('eventEndDate');
+      const endHourInput = safeGetElementById('eventEndHour');
+      const endMinuteInput = safeGetElementById('eventEndMinute');
       
       const event = {
         title: title,
         description: description,
-        startTime: combineDateAndTime(startDate, startTime),
-        endTime: combineDateAndTime(endDate, endTime),
+        startTime: getDateTimeAsISO(startDateInput, startHourInput, startMinuteInput),
+        endTime: getDateTimeAsISO(endDateInput, endHourInput, endMinuteInput),
         allDay: isAllDay,
         color: formData.get('color'),
         recurrence: (formData.get('recurrence') || 'none'),
@@ -5025,13 +5088,13 @@ function enableDayGridClickToCreate() {
     // Open modal with default values
     showEventModal(tempEventId);
     const startDateInput = safeGetElementById('eventStartDate');
-    const startTimeInput = safeGetElementById('eventStartTime');
+    const startHourInput = safeGetElementById('eventStartHour');
+    const startMinuteInput = safeGetElementById('eventStartMinute');
     const endDateInput = safeGetElementById('eventEndDate');
-    const endTimeInput = safeGetElementById('eventEndTime');
-    if (startDateInput) startDateInput.value = formatDateOnly(start);
-    if (startTimeInput) startTimeInput.value = formatTimeOnly(start);
-    if (endDateInput) endDateInput.value = formatDateOnly(end);
-    if (endTimeInput) endTimeInput.value = formatTimeOnly(end);
+    const endHourInput = safeGetElementById('eventEndHour');
+    const endMinuteInput = safeGetElementById('eventEndMinute');
+    setDateTimeFromISO(startDateInput, startHourInput, startMinuteInput, start.toISOString());
+    setDateTimeFromISO(endDateInput, endHourInput, endMinuteInput, end.toISOString());
   }
 }
 
@@ -5049,10 +5112,20 @@ function openAllDayCreateModal(date) {
   if (allDayCheckbox) {
     allDayCheckbox.checked = true;
   }
+  const startDateInput = safeGetElementById('eventStartDate');
+  const startHourInput = safeGetElementById('eventStartHour');
+  const startMinuteInput = safeGetElementById('eventStartMinute');
+  const endDateInput = safeGetElementById('eventEndDate');
+  const endHourInput = safeGetElementById('eventEndHour');
+  const endMinuteInput = safeGetElementById('eventEndMinute');
   applyAllDayMode(true, {
-    startInput: safeGetElementById('eventStartTime'),
-    endInput: safeGetElementById('eventEndTime'),
+    startInput: startDateInput,
+    endInput: endDateInput,
     allDayRow,
+    startHourInput,
+    startMinuteInput,
+    endHourInput,
+    endMinuteInput
   });
   
   // Set all-day event date
@@ -5178,10 +5251,14 @@ function enableWeekGridClickToCreate() {
 
         // Open modal with default values
         showEventModal(tempEventId);
-        const startTimeInput = safeGetElementById('eventStartTime');
-        const endTimeInput = safeGetElementById('eventEndTime');
-        if (startTimeInput) startTimeInput.value = formatDateTimeLocal(start);
-        if (endTimeInput) endTimeInput.value = formatDateTimeLocal(end);
+        const startDateInput = safeGetElementById('eventStartDate');
+        const startHourInput = safeGetElementById('eventStartHour');
+        const startMinuteInput = safeGetElementById('eventStartMinute');
+        const endDateInput = safeGetElementById('eventEndDate');
+        const endHourInput = safeGetElementById('eventEndHour');
+        const endMinuteInput = safeGetElementById('eventEndMinute');
+        setDateTimeFromISO(startDateInput, startHourInput, startMinuteInput, start.toISOString());
+        setDateTimeFromISO(endDateInput, endHourInput, endMinuteInput, end.toISOString());
       };
 
       document.addEventListener('mousemove', onMouseMove);
