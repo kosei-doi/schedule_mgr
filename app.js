@@ -1293,6 +1293,20 @@ function buildDateTitleKey(startTime, title) {
   return `${dateKey}__${titleKey}`;
 }
 
+// Build a comprehensive key that includes more event properties to prevent false duplicates
+function buildEventKey(event) {
+  if (!event || !event.startTime) return null;
+  const dateKey = formatDateOnly(event.startTime);
+  if (!dateKey) return null;
+  const titleKey = normalizeTitleForComparison(event.title || '');
+  const startTimeKey = event.startTime ? new Date(event.startTime).toISOString() : '';
+  const endTimeKey = event.endTime ? new Date(event.endTime).toISOString() : '';
+  const descriptionKey = event.description ? normalizeTitleForComparison(event.description) : '';
+  const allDayKey = event.allDay ? '1' : '0';
+  // Include startTime, endTime, description, and allDay status in the key
+  return `${dateKey}__${titleKey}__${startTimeKey}__${endTimeKey}__${descriptionKey}__${allDayKey}`;
+}
+
 // Check for duplicates in all Firebase events (prioritize Google-originated)
 async function deduplicateFirebaseEvents() {
   if (!Array.isArray(events) || events.length === 0) {
@@ -1302,23 +1316,23 @@ async function deduplicateFirebaseEvents() {
   const rangeSet = getAllowedDateRanges();
   let deleted = 0;
 
-  // Group all events by date + title
-  const eventsByDateTitle = new Map();
+  // Group all events by comprehensive key (date + title + startTime + endTime + description + allDay)
+  const eventsByKey = new Map();
   for (const ev of events) {
     if (!ev?.startTime) continue;
     if (ev.isTimetable === true) continue;
     if (!isEventInAllowedRange(ev, rangeSet)) continue;
 
-    const key = buildDateTitleKey(ev.startTime, ev.title || '');
+    const key = buildEventKey(ev);
     if (!key) continue;
-    if (!eventsByDateTitle.has(key)) {
-      eventsByDateTitle.set(key, []);
+    if (!eventsByKey.has(key)) {
+      eventsByKey.set(key, []);
     }
-    eventsByDateTitle.get(key).push(ev);
+    eventsByKey.get(key).push(ev);
   }
 
   // Check for duplicates in each group
-  for (const [key, duplicates] of eventsByDateTitle.entries()) {
+  for (const [key, duplicates] of eventsByKey.entries()) {
     if (duplicates.length <= 1) continue; // No duplicates
 
     // Prioritize Google-originated events
@@ -1409,21 +1423,24 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
 
   const rangeSet = ranges || getAllowedDateRanges();
 
-  // Group all events by date + title
-  const eventsByDateTitle = new Map();
+  // Group all events by comprehensive key (date + title + startTime + endTime + description + allDay)
+  const eventsByKey = new Map();
   const registerEventByKey = (ev) => {
     if (!ev?.startTime) return;
     if (ev.isTimetable === true) return;
     if (!isEventInAllowedRange(ev, rangeSet)) return;
-    const key = buildDateTitleKey(ev.startTime, ev.title || '');
+    const key = buildEventKey(ev);
     if (!key) return;
-    if (!eventsByDateTitle.has(key)) {
-      eventsByDateTitle.set(key, []);
+    if (!eventsByKey.has(key)) {
+      eventsByKey.set(key, []);
     }
-    eventsByDateTitle.get(key).push({
+    eventsByKey.get(key).push({
       id: ev.id,
       title: ev.title || '',
       startTime: ev.startTime,
+      endTime: ev.endTime,
+      description: ev.description || '',
+      allDay: ev.allDay || false,
       source: ev.source || '',
       isGoogleImported: ev.isGoogleImported === true,
       googleEventId: ev.googleEventId || null,
@@ -1434,10 +1451,10 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
   const updateKeyEntry = (key, eventLike) => {
     if (!key) return;
     if (!eventLike) {
-      eventsByDateTitle.delete(key);
+      eventsByKey.delete(key);
       return;
     }
-    eventsByDateTitle.set(key, [eventLike]);
+    eventsByKey.set(key, [eventLike]);
   };
 
   for (const googleEvent of googleEvents) {
@@ -1445,7 +1462,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
     if (normalized.filteredOut) continue;
     if (!normalized.startTime || !normalized.endTime) continue;
 
-    const key = buildDateTitleKey(normalized.startTime, normalized.title || '');
+    const key = buildEventKey(normalized);
     const dateLabel = formatDateOnly(normalized.startTime) || normalized.startTime || '';
     const linkedId =
       googleEvent.scheduleMgrId && eventsById.has(googleEvent.scheduleMgrId)
@@ -1453,7 +1470,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
         : null;
 
     if (key) {
-      const duplicates = eventsByDateTitle.get(key) || [];
+      const duplicates = eventsByKey.get(key) || [];
       const keeperIds = new Set();
       if (linkedId) {
         keeperIds.add(linkedId);
