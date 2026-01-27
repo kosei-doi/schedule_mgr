@@ -42,7 +42,22 @@ function doPost(e) {
     windowEnd.setHours(23, 59, 59, 999);
 
     const existingEvents = calendar.getEvents(windowStart, windowEnd, { search: DESCRIPTION_TAG });
-    const existingMap = buildExistingMap(existingEvents);
+    let existingMap = buildExistingMap(existingEvents);
+    const hasGoogleIdUpserts = events.some((item) => item && item.googleEventId);
+    if (hasGoogleIdUpserts) {
+      const allEvents = calendar.getEvents(windowStart, windowEnd);
+      const allEventsMap = buildExistingMap(allEvents);
+      for (const [googleId, event] of allEventsMap.googleIdMap.entries()) {
+        if (!existingMap.googleIdMap.has(googleId)) {
+          existingMap.googleIdMap.set(googleId, event);
+        }
+      }
+      for (const [scheduleId, event] of allEventsMap.scheduleIdMap.entries()) {
+        if (!existingMap.scheduleIdMap.has(scheduleId)) {
+          existingMap.scheduleIdMap.set(scheduleId, event);
+        }
+      }
+    }
 
     let created = 0;
     let updated = 0;
@@ -65,7 +80,10 @@ function doPost(e) {
       const reminderMinutes = getReminderMinutes(eventPayload?.reminderMinutes);
 
       const fullDescription = buildDescription(eventId, bodyDescription);
-      const eventEntry = existingMap.scheduleIdMap.get(eventId);
+      let eventEntry = existingMap.scheduleIdMap.get(eventId);
+      if (!eventEntry && eventPayload?.googleEventId) {
+        eventEntry = existingMap.googleIdMap.get(String(eventPayload.googleEventId).trim());
+      }
 
       if (eventEntry) {
         applyUpdates(eventEntry, { title, start, end, location, fullDescription, isAllDay, reminderMinutes });
@@ -159,11 +177,14 @@ function processMutations(calendar, payload) {
   const existingEvents = calendar.getEvents(windowStart, windowEnd, { search: DESCRIPTION_TAG });
   let existingMap = buildExistingMap(existingEvents);
   
-  // If any delete has googleEventId, also fetch ALL events (without tag filter) to ensure we can delete fetched-only events
+  // If any upsert/delete has googleEventId, also fetch ALL events (without tag filter)
+  const hasGoogleIdUpserts = upserts.some(item => 
+    item && typeof item === 'object' && item.googleEventId
+  );
   const hasGoogleIdDeletes = deletes.some(item => 
     item && typeof item === 'object' && item.googleEventId
   );
-  if (hasGoogleIdDeletes) {
+  if (hasGoogleIdUpserts || hasGoogleIdDeletes) {
     const allEvents = calendar.getEvents(windowStart, windowEnd);
     // Merge all events into the map (this will add fetched-only events that don't have the tag)
     const allEventsMap = buildExistingMap(allEvents);
@@ -202,7 +223,10 @@ function processMutations(calendar, payload) {
     const reminderMinutes = getReminderMinutes(eventPayload?.reminderMinutes);
     const fullDescription = buildDescription(eventId, bodyDescription);
 
-    const eventEntry = existingMap.scheduleIdMap.get(eventId);
+    let eventEntry = existingMap.scheduleIdMap.get(eventId);
+    if (!eventEntry && eventPayload?.googleEventId) {
+      eventEntry = existingMap.googleIdMap.get(String(eventPayload.googleEventId).trim());
+    }
     if (eventEntry) {
       applyUpdates(eventEntry, { title, start, end, location, fullDescription, isAllDay, reminderMinutes });
       updated += 1;

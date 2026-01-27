@@ -39,6 +39,13 @@ const eventListeners = {
 
 // Global variables
 let events = [];
+let shifts = []; // Shift data from pt app (managed separately from events)
+let workplaces = []; // Workplace data from pt app
+let combiSemesters = [];
+let combiCurrentSemesterId = null;
+let combiTimetableEvents = [];
+let combiTaskEvents = [];
+let combiTasks = {};
 let currentDate = new Date();
 let currentView = 'day'; // 'day', 'week', or 'month'
 let editingEventId = null;
@@ -62,6 +69,15 @@ const VISIBLE_END_HOUR = 23;
 const HOUR_HEIGHT_PX = 25; // Fallback value (actual value is obtained dynamically)
 const MIN_EVENT_HEIGHT_PX = 15;
 const VISIBLE_HOURS = VISIBLE_END_HOUR - VISIBLE_START_HOUR + 1;
+let monthViewRangeStart = null;
+let monthViewRangeEnd = null;
+const COMBI_PERIOD_TIMES = [
+  { start: '08:50', end: '10:30' },
+  { start: '10:40', end: '12:20' },
+  { start: '13:10', end: '14:50' },
+  { start: '15:00', end: '16:40' },
+  { start: '16:50', end: '18:30' },
+];
 
 // Get actual height of time slot (1 hour)
 function getHourHeight() {
@@ -519,24 +535,10 @@ function updateViewsForEvent(event) {
   }
   // Month view: Check if event is included in the month
   else if (currentView === 'month') {
-    const currentMonth = currentDate.getMonth();
-    const currentYear = currentDate.getFullYear();
-    
-    // Get event start and end months
-    const eventStartMonth = eventStartDate.getMonth();
-    const eventStartYear = eventStartDate.getFullYear();
-    const eventEndMonth = eventEndDate.getMonth();
-    const eventEndYear = eventEndDate.getFullYear();
-    
-    // Check if event overlaps with current month
-    const eventStartsInMonth = eventStartYear === currentYear && eventStartMonth === currentMonth;
-    const eventEndsInMonth = eventEndYear === currentYear && eventEndMonth === currentMonth;
-    const eventSpansMonth = (
-      (eventStartYear < currentYear || (eventStartYear === currentYear && eventStartMonth < currentMonth)) &&
-      (eventEndYear > currentYear || (eventEndYear === currentYear && eventEndMonth > currentMonth))
-    );
-    
-    if (eventStartsInMonth || eventEndsInMonth || eventSpansMonth) {
+    const range = monthViewRangeStart && monthViewRangeEnd
+      ? { start: monthViewRangeStart, end: monthViewRangeEnd }
+      : getMonthViewVisibleRange(currentDate);
+    if (eventStartDate <= range.end && eventEndDate >= range.start) {
       renderMonthView();
     }
   }
@@ -570,6 +572,48 @@ function normalizeEventFromSnapshot(snapshot, key) {
     isGoogleImported: payload.isGoogleImported === true,
     externalUpdatedAt: payload.externalUpdatedAt || null,
   };
+}
+
+// Normalize shift from pt app format to event format
+function normalizeShiftFromSnapshot(snapshot, key) {
+  if (!snapshot || !key) {
+    return null;
+  }
+  const payload = snapshot.val() || {};
+  if (typeof payload !== 'object') {
+    return null;
+  }
+  
+  // Shift data format: {date, start, end, workplaceId, workplaceName, role, notes, rate}
+  if (payload.date && payload.start && payload.end) {
+    const startTime = `${payload.date}T${payload.start}`;
+    const endTime = `${payload.date}T${payload.end}`;
+    const workplaceName = payload.workplaceName || payload.role || 'Shift';
+    
+    // Get workplace color if workplaceId exists
+    let shiftColor = '#f59e0b'; // Default orange color
+    if (payload.workplaceId && Array.isArray(workplaces)) {
+      const workplace = workplaces.find(w => w.id === payload.workplaceId);
+      if (workplace && workplace.color) {
+        shiftColor = workplace.color;
+      }
+    }
+    
+    return {
+      ...payload,
+      id: `shift_${key}`, // Add prefix to identify
+      title: workplaceName,
+      description: payload.notes || '',
+      startTime: startTime,
+      endTime: endTime,
+      color: shiftColor,
+      allDay: false,
+      isShift: true, // Flag to indicate this is a shift
+      source: 'pt',
+    };
+  }
+  
+  return null;
 }
 
 // Load events function (incremental update version)
@@ -798,6 +842,484 @@ async function loadEvents() {
   };
 }
 
+// Load shifts from pt app
+let unsubscribeShifts = null;
+let unsubscribeShiftAdded = null;
+let unsubscribeShiftChanged = null;
+let unsubscribeShiftRemoved = null;
+
+let unsubscribeCombiSemesters = null;
+let unsubscribeCombiCurrentSemester = null;
+let unsubscribeCombiTasks = null;
+
+async function loadShifts() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    return;
+  }
+  
+  const allowedRanges = getAllowedDateRanges();
+  
+  // Unsubscribe existing listeners
+  if (typeof unsubscribeShifts === 'function') {
+    unsubscribeShifts();
+    unsubscribeShifts = null;
+  }
+  if (typeof unsubscribeShiftAdded === 'function') {
+    unsubscribeShiftAdded();
+    unsubscribeShiftAdded = null;
+  }
+  if (typeof unsubscribeShiftChanged === 'function') {
+    unsubscribeShiftChanged();
+    unsubscribeShiftChanged = null;
+  }
+  if (typeof unsubscribeShiftRemoved === 'function') {
+    unsubscribeShiftRemoved();
+    unsubscribeShiftRemoved = null;
+  }
+  
+  const shiftsRef = window.firebase.ref(window.firebase.db, "shifts");
+  
+  // Initial: Get all shifts
+  try {
+    const snapshot = await window.firebase.get(shiftsRef);
+    const data = snapshot.val();
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const newShifts = Object.keys(data).map(key => {
+        const payload = data[key] || {};
+        return normalizeShiftFromSnapshot({ val: () => payload }, key);
+      }).filter(shift => shift !== null && shift !== undefined);
+      
+      const filteredShifts = newShifts.filter(shift => 
+        isEventInAllowedRange(shift, allowedRanges)
+      );
+      shifts = filteredShifts;
+      shifts.sort((a, b) => {
+        const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+        const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+        if (Number.isNaN(aTime)) return 1;
+        if (Number.isNaN(bTime)) return -1;
+        return aTime - bTime;
+      });
+      
+      // Update shift colors if workplace data is loaded
+      updateShiftsColor();
+      
+      updateViews();
+    } else {
+      shifts = [];
+      updateViews();
+    }
+  } catch (error) {
+    console.error('Failed to load shifts:', error);
+    return;
+  }
+  
+  // Afterward: Incremental updates via child events
+  unsubscribeShiftAdded = window.firebase.onChildAdded(shiftsRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      
+      const newShift = normalizeShiftFromSnapshot(snapshot, key);
+      if (!newShift || !newShift.id) return;
+      
+      if (!isEventInAllowedRange(newShift, allowedRanges)) return;
+      
+      const existingIndex = shifts.findIndex(s => s && s.id === `shift_${key}`);
+      if (existingIndex === -1) {
+        shifts.push(newShift);
+        shifts.sort((a, b) => {
+          const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+          const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+          if (Number.isNaN(aTime)) return 1;
+          if (Number.isNaN(bTime)) return -1;
+          return aTime - bTime;
+        });
+        updateViews();
+      }
+    } catch (error) {
+      console.error('Failed to add shift:', error);
+    }
+  });
+  
+  unsubscribeShiftChanged = window.firebase.onChildChanged(shiftsRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      
+      const updatedShift = normalizeShiftFromSnapshot(snapshot, key);
+      const existingIndex = shifts.findIndex(s => s && s.id === `shift_${key}`);
+      
+      if (existingIndex !== -1) {
+        const oldShift = shifts[existingIndex];
+        shifts[existingIndex] = updatedShift;
+        shifts.sort((a, b) => {
+          const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+          const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+          if (Number.isNaN(aTime)) return 1;
+          if (Number.isNaN(bTime)) return -1;
+          return aTime - bTime;
+        });
+        
+        const wasInRange = isEventInAllowedRange(oldShift, allowedRanges);
+        const isInRange = isEventInAllowedRange(updatedShift, allowedRanges);
+        
+        if (wasInRange || isInRange) {
+          updateViews();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update shift:', error);
+    }
+  });
+  
+  unsubscribeShiftRemoved = window.firebase.onChildRemoved(shiftsRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      
+      const existingIndex = shifts.findIndex(s => s && s.id === `shift_${key}`);
+      if (existingIndex !== -1) {
+        shifts.splice(existingIndex, 1);
+        updateViews();
+      }
+    } catch (error) {
+      console.error('Failed to remove shift:', error);
+    }
+  });
+  
+  // Unified unsubscribe function
+  unsubscribeShifts = () => {
+    if (typeof unsubscribeShiftAdded === 'function') {
+      unsubscribeShiftAdded();
+      unsubscribeShiftAdded = null;
+    }
+    if (typeof unsubscribeShiftChanged === 'function') {
+      unsubscribeShiftChanged();
+      unsubscribeShiftChanged = null;
+    }
+    if (typeof unsubscribeShiftRemoved === 'function') {
+      unsubscribeShiftRemoved();
+      unsubscribeShiftRemoved = null;
+    }
+  };
+}
+
+function getCombiActiveSemester() {
+  if (!Array.isArray(combiSemesters) || combiSemesters.length === 0) {
+    return null;
+  }
+  if (combiCurrentSemesterId) {
+    return combiSemesters.find(s => s && s.id === combiCurrentSemesterId) || null;
+  }
+  return combiSemesters[0] || null;
+}
+
+function buildCombiTimetableEvents() {
+  const semester = getCombiActiveSemester();
+  if (!semester) {
+    combiTimetableEvents = [];
+    return;
+  }
+
+  const classDays = Array.isArray(semester.classDays) ? semester.classDays : [];
+  const timetable = Array.isArray(semester.timetable) ? semester.timetable : [];
+  const events = [];
+
+  classDays.forEach((dateStr) => {
+    if (!dateStr || typeof dateStr !== 'string') return;
+    const dateObj = new Date(dateStr);
+    if (Number.isNaN(dateObj.getTime())) return;
+    const dayIndex = (dateObj.getDay() + 6) % 7; // Mon=0 ... Sun=6
+    if (dayIndex < 0 || dayIndex > 4) return;
+
+    for (let periodIndex = 0; periodIndex < 5; periodIndex += 1) {
+      const row = Array.isArray(timetable[periodIndex]) ? timetable[periodIndex] : [];
+      const subject = typeof row[dayIndex] === 'string' ? row[dayIndex].trim() : '';
+      if (!subject) continue;
+      const periodTime = COMBI_PERIOD_TIMES[periodIndex];
+      if (!periodTime || !periodTime.start || !periodTime.end) continue;
+
+      events.push({
+        id: `combi_timetable_${semester.id}_${dateStr}_${periodIndex}_${dayIndex}`,
+        title: subject,
+        description: '',
+        startTime: `${dateStr}T${periodTime.start}`,
+        endTime: `${dateStr}T${periodTime.end}`,
+        allDay: false,
+        isTimetable: true,
+        color: '#3b82f6',
+        source: 'combi',
+      });
+    }
+  });
+
+  combiTimetableEvents = events;
+}
+
+function buildCombiTaskEvents() {
+  const activeSemesterId = combiCurrentSemesterId;
+  const tasks = combiTasks && typeof combiTasks === 'object' ? combiTasks : {};
+  const events = [];
+
+  Object.entries(tasks).forEach(([taskId, task]) => {
+    if (!task || typeof task !== 'object') return;
+    if (task.completed === true) return;
+    if (activeSemesterId) {
+      if (!task.semesterId || task.semesterId !== activeSemesterId) return;
+    }
+    const dueDateValue = task.dueDate;
+    if (!dueDateValue || typeof dueDateValue !== 'string') return;
+    const datePart = dueDateValue.split('T')[0];
+    const dateObj = new Date(datePart);
+    if (Number.isNaN(dateObj.getTime())) return;
+
+    const taskTypeLabel = task.taskType || 'Task';
+    const taskTitle = task.title || 'Task';
+    const displayTitle = `${taskTypeLabel}: ${taskTitle}`;
+
+    events.push({
+      id: `combi_task_${taskId}`,
+      title: displayTitle,
+      description: task.content || '',
+      startTime: `${datePart}T00:00`,
+      endTime: `${datePart}T23:59`,
+      allDay: true,
+      isTask: true,
+      color: '#0ea5e9',
+      source: 'combi',
+    });
+  });
+
+  combiTaskEvents = events;
+}
+
+function rebuildCombiDerivedEvents() {
+  buildCombiTimetableEvents();
+  buildCombiTaskEvents();
+  updateViews();
+}
+
+function loadCombiSemesters() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    combiSemesters = [];
+    rebuildCombiDerivedEvents();
+    return;
+  }
+
+  if (typeof unsubscribeCombiSemesters === 'function') {
+    unsubscribeCombiSemesters();
+    unsubscribeCombiSemesters = null;
+  }
+
+  const semestersRef = window.firebase.ref(window.firebase.db, 'semesters');
+  unsubscribeCombiSemesters = window.firebase.onValue(semestersRef, (snapshot) => {
+    const data = snapshot.val();
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      combiSemesters = Object.values(data);
+    } else {
+      combiSemesters = [];
+    }
+    rebuildCombiDerivedEvents();
+  });
+}
+
+function loadCombiCurrentSemesterId() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    combiCurrentSemesterId = null;
+    rebuildCombiDerivedEvents();
+    return;
+  }
+
+  if (typeof unsubscribeCombiCurrentSemester === 'function') {
+    unsubscribeCombiCurrentSemester();
+    unsubscribeCombiCurrentSemester = null;
+  }
+
+  const currentRef = window.firebase.ref(window.firebase.db, 'tabler/currentSemesterId');
+  unsubscribeCombiCurrentSemester = window.firebase.onValue(currentRef, (snapshot) => {
+    const data = snapshot.val();
+    combiCurrentSemesterId = typeof data === 'string' ? data : null;
+    rebuildCombiDerivedEvents();
+  });
+}
+
+function loadCombiTasks() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    combiTasks = {};
+    rebuildCombiDerivedEvents();
+    return;
+  }
+
+  if (typeof unsubscribeCombiTasks === 'function') {
+    unsubscribeCombiTasks();
+    unsubscribeCombiTasks = null;
+  }
+
+  const tasksRef = window.firebase.ref(window.firebase.db, 'tabler/tasks');
+  unsubscribeCombiTasks = window.firebase.onValue(tasksRef, (snapshot) => {
+    const data = snapshot.val();
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      combiTasks = data;
+    } else {
+      combiTasks = {};
+    }
+    buildCombiTaskEvents();
+    updateViews();
+  });
+}
+
+// Load workplaces from pt app
+let unsubscribeWorkplaces = null;
+let unsubscribeWorkplaceAdded = null;
+let unsubscribeWorkplaceChanged = null;
+let unsubscribeWorkplaceRemoved = null;
+
+async function loadWorkplaces() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    return;
+  }
+  
+  // Unsubscribe existing listeners
+  if (typeof unsubscribeWorkplaces === 'function') {
+    unsubscribeWorkplaces();
+    unsubscribeWorkplaces = null;
+  }
+  if (typeof unsubscribeWorkplaceAdded === 'function') {
+    unsubscribeWorkplaceAdded();
+    unsubscribeWorkplaceAdded = null;
+  }
+  if (typeof unsubscribeWorkplaceChanged === 'function') {
+    unsubscribeWorkplaceChanged();
+    unsubscribeWorkplaceChanged = null;
+  }
+  if (typeof unsubscribeWorkplaceRemoved === 'function') {
+    unsubscribeWorkplaceRemoved();
+    unsubscribeWorkplaceRemoved = null;
+  }
+  
+  try {
+    const workplacesRef = window.firebase.ref(window.firebase.db, 'workplaces');
+    const snapshot = await window.firebase.get(workplacesRef);
+    const data = snapshot.val();
+    
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      workplaces = Object.keys(data).map(key => ({
+        id: key,
+        name: data[key].name || '',
+        rate: data[key].rate || 0,
+        color: data[key].color || '#3b82f6' // Default blue color
+      }));
+      
+      // Update existing shift colors when workplace data is loaded
+      updateShiftsColor();
+    } else {
+      workplaces = [];
+    }
+    
+    // Afterward: Incremental updates via child events
+    unsubscribeWorkplaceAdded = window.firebase.onChildAdded(workplacesRef, (snapshot) => {
+      try {
+        const key = snapshot.key;
+        if (!key) return;
+        
+        const workplace = {
+          id: key,
+          name: snapshot.val().name || '',
+          rate: snapshot.val().rate || 0,
+          color: snapshot.val().color || '#3b82f6'
+        };
+        
+        const existingIndex = workplaces.findIndex(w => w.id === key);
+        if (existingIndex === -1) {
+          workplaces.push(workplace);
+          updateShiftsColor();
+        }
+      } catch (error) {
+        console.error('Failed to add workplace:', error);
+      }
+    });
+    
+    unsubscribeWorkplaceChanged = window.firebase.onChildChanged(workplacesRef, (snapshot) => {
+      try {
+        const key = snapshot.key;
+        if (!key) return;
+        
+        const workplace = {
+          id: key,
+          name: snapshot.val().name || '',
+          rate: snapshot.val().rate || 0,
+          color: snapshot.val().color || '#3b82f6'
+        };
+        
+        const existingIndex = workplaces.findIndex(w => w.id === key);
+        if (existingIndex !== -1) {
+          workplaces[existingIndex] = workplace;
+          updateShiftsColor();
+        }
+      } catch (error) {
+        console.error('Failed to update workplace:', error);
+      }
+    });
+    
+    unsubscribeWorkplaceRemoved = window.firebase.onChildRemoved(workplacesRef, (snapshot) => {
+      try {
+        const key = snapshot.key;
+        if (!key) return;
+        
+        const existingIndex = workplaces.findIndex(w => w.id === key);
+        if (existingIndex !== -1) {
+          workplaces.splice(existingIndex, 1);
+          updateShiftsColor();
+        }
+      } catch (error) {
+        console.error('Failed to remove workplace:', error);
+      }
+    });
+    
+    // Unified unsubscribe function
+    unsubscribeWorkplaces = () => {
+      if (typeof unsubscribeWorkplaceAdded === 'function') {
+        unsubscribeWorkplaceAdded();
+        unsubscribeWorkplaceAdded = null;
+      }
+      if (typeof unsubscribeWorkplaceChanged === 'function') {
+        unsubscribeWorkplaceChanged();
+        unsubscribeWorkplaceChanged = null;
+      }
+      if (typeof unsubscribeWorkplaceRemoved === 'function') {
+        unsubscribeWorkplaceRemoved();
+        unsubscribeWorkplaceRemoved = null;
+      }
+    };
+  } catch (error) {
+    console.error('Failed to load workplaces:', error);
+    workplaces = [];
+  }
+}
+
+// Update shifts color based on workplaces
+function updateShiftsColor() {
+  if (!Array.isArray(shifts) || !Array.isArray(workplaces)) {
+    return;
+  }
+  
+  let needsUpdate = false;
+  shifts.forEach(shift => {
+    if (shift.workplaceId) {
+      const workplace = workplaces.find(w => w.id === shift.workplaceId);
+      if (workplace && workplace.color && workplace.color !== shift.color) {
+        shift.color = workplace.color;
+        needsUpdate = true;
+      }
+    }
+  });
+  
+  // Redraw views if colors were updated
+  if (needsUpdate) {
+    updateViews();
+  }
+}
 
 function buildSyncEventPayload(event) {
   const startIso = event.startTime ? new Date(event.startTime).toISOString() : null;
@@ -816,6 +1338,7 @@ function buildSyncEventPayload(event) {
         ? event.reminderMinutes
         : null,
     color: event.color || null,
+    googleEventId: event.googleEventId || null,
   };
 }
 
@@ -2188,38 +2711,98 @@ function getEventsByDate(date) {
   targetDateEnd.setHours(23, 59, 59, 999);
   
   const list = [];
-  if (!Array.isArray(events)) return list;
   
-  events.forEach(ev => {
-    if (!ev || !ev.id) return;
-    if (!ev.startTime) return;
-    
-    // All-day event
-    if (isAllDayEvent(ev)) {
-      if (typeof ev.startTime !== 'string') return;
-      const eventStartDate = ev.startTime.split('T')[0];
-      const eventEndDate = ev.endTime && typeof ev.endTime === 'string' ? ev.endTime.split('T')[0] : eventStartDate;
-      // Check if specified date is between event start and end date (inclusive)
-      if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
+  // Get from events array
+  if (Array.isArray(events)) {
+    events.forEach(ev => {
+      if (!ev || !ev.id) return;
+      if (!ev.startTime) return;
+      
+      // All-day event
+      if (isAllDayEvent(ev)) {
+        if (typeof ev.startTime !== 'string') return;
+        const eventStartDate = ev.startTime.split('T')[0];
+        const eventEndDate = ev.endTime && typeof ev.endTime === 'string' ? ev.endTime.split('T')[0] : eventStartDate;
+        // Check if specified date is between event start and end date (inclusive)
+        if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
+          list.push(ev);
+        }
+        return;
+      }
+      
+      // Timed event
+      const eventStart = new Date(ev.startTime);
+      const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
+      
+      if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
+      
+      // Check if period from 00:00 to 23:59:59 of specified date overlaps with event period
+      // Event starts on previous day and ends on specified day, or
+      // Event starts on specified day and ends on next day, or
+      // Event period is completely contained within specified day
+      if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
         list.push(ev);
       }
-      return;
-    }
-    
-    // Timed event
-    const eventStart = new Date(ev.startTime);
-    const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
-    
-    if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
-    
-    // Check if period from 00:00 to 23:59:59 of specified date overlaps with event period
-    // Event starts on previous day and ends on specified day, or
-    // Event starts on specified day and ends on next day, or
-    // Event period is completely contained within specified day
-    if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
-      list.push(ev);
-    }
-  });
+    });
+  }
+  
+  // Get from shifts array (managed separately from events)
+  if (Array.isArray(shifts)) {
+    shifts.forEach(shift => {
+      if (!shift || !shift.id) return;
+      if (!shift.startTime) return;
+      
+      const shiftStart = new Date(shift.startTime);
+      const shiftEnd = shift.endTime ? new Date(shift.endTime) : shiftStart;
+      
+      if (Number.isNaN(shiftStart.getTime()) || Number.isNaN(shiftEnd.getTime())) return;
+      
+      // Check if period from 00:00 to 23:59:59 of specified date overlaps with shift period
+      if (shiftStart <= targetDateEnd && shiftEnd >= targetDate) {
+        list.push(shift);
+      }
+    });
+  }
+
+  if (Array.isArray(combiTimetableEvents)) {
+    combiTimetableEvents.forEach(ev => {
+      if (!ev || !ev.id) return;
+      if (!ev.startTime) return;
+
+      const eventStart = new Date(ev.startTime);
+      const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
+      if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
+
+      if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
+        list.push(ev);
+      }
+    });
+  }
+
+  if (Array.isArray(combiTaskEvents)) {
+    combiTaskEvents.forEach(ev => {
+      if (!ev || !ev.id) return;
+      if (!ev.startTime) return;
+
+      if (isAllDayEvent(ev)) {
+        const eventStartDate = ev.startTime.split('T')[0];
+        const eventEndDate = ev.endTime && typeof ev.endTime === 'string' ? ev.endTime.split('T')[0] : eventStartDate;
+        if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
+          list.push(ev);
+        }
+        return;
+      }
+
+      const eventStart = new Date(ev.startTime);
+      const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
+      if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
+
+      if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
+        list.push(ev);
+      }
+    });
+  }
+  
   return list;
 }
 
@@ -2442,15 +3025,23 @@ function getEventRenderSignature(event, { variant } = {}) {
 function populateEventElement(element, event, options = {}) {
   const { variant } = options;
   const isAllDay = variant === 'all-day' || isAllDayEvent(event);
+  const isShift = event.isShift === true || (event.id && typeof event.id === 'string' && event.id.startsWith('shift_'));
+  
   element.className = 'event-item';
   if (isAllDay) element.classList.add('all-day');
   if (event.isTimetable === true) element.classList.add('timetable-event');
+  if (isShift) element.classList.add('readonly-event'); // Add readonly class for shifts
   element.style.backgroundColor = event.color || '#3b82f6';
   element.dataset.eventId = event.id;
   if (event.isTimetable === true) {
     element.dataset.isTimetable = 'true';
   } else {
     delete element.dataset.isTimetable;
+  }
+  if (isShift) {
+    element.dataset.isShift = 'true';
+  } else {
+    delete element.dataset.isShift;
   }
   if (isAllDay) {
     element.dataset.allDay = 'true';
@@ -2464,19 +3055,23 @@ function populateEventElement(element, event, options = {}) {
   const displayTitle = truncateText(fullTitle, 30);
 
   if (isAllDay) {
-    element.setAttribute('aria-label', `${fullTitle} (All day)`);
+    element.setAttribute('aria-label', `${fullTitle} (All day)${isShift ? ' (Read-only)' : ''}`);
     element.innerHTML = `
       <div class="event-title">${escapeHtml(displayTitle)}</div>
     `;
   } else {
     const startLabel = event.startTime ? formatTime(event.startTime) : '--:--';
     const endLabel = event.endTime ? formatTime(event.endTime) : '--:--';
-    element.setAttribute('aria-label', `${fullTitle}, ${startLabel} to ${endLabel}`);
-    element.innerHTML = `
+    element.setAttribute('aria-label', `${fullTitle}, ${startLabel} to ${endLabel}${isShift ? ' (Read-only)' : ''}`);
+    // Hide resize handles for shifts (read-only)
+    const resizeHandlesHtml = isShift ? '' : `
       <div class="resize-handle top"></div>
+      <div class="resize-handle bottom"></div>
+    `;
+    element.innerHTML = `
+      ${resizeHandlesHtml}
       <div class="event-title">${escapeHtml(displayTitle)}</div>
       <div class="event-time">${startLabel} - ${endLabel}</div>
-      <div class="resize-handle bottom"></div>
     `;
   }
 
@@ -2519,6 +3114,126 @@ function applyOverlapStyles(element, groupInfo) {
   const leftPercent = widthPercent * groupInfo.indexInGroup;
   element.style.left = `${leftPercent}%`;
   element.style.right = `${100 - (leftPercent + widthPercent)}%`;
+}
+
+function getMonthViewVisibleRange(baseDate) {
+  const safeBase = baseDate instanceof Date && !Number.isNaN(baseDate.getTime())
+    ? baseDate
+    : new Date();
+  const year = safeBase.getFullYear();
+  const month = safeBase.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const startDate = new Date(firstDay);
+  startDate.setDate(startDate.getDate() - firstDay.getDay());
+  startDate.setHours(0, 0, 0, 0);
+  const endDate = new Date(startDate);
+  endDate.setDate(startDate.getDate() + (6 * 7) - 1);
+  endDate.setHours(23, 59, 59, 999);
+  return { start: startDate, end: endDate };
+}
+
+function getEventTemplates(limit = 40) {
+  if (!Array.isArray(events)) return [];
+  const uniqueMap = new Map();
+
+  events.forEach((event) => {
+    if (!event || !event.id || !event.startTime) return;
+    if (event.isTimetable === true) return;
+    if (event.isShift === true) return;
+    if (typeof event.id === 'string' && event.id.startsWith('shift_')) return;
+    if (typeof event.id === 'string' && event.id.startsWith('temp-')) return;
+
+    const eventStart = new Date(event.startTime);
+    if (Number.isNaN(eventStart.getTime())) return;
+
+    const title = event.title || '';
+    const key = title;
+    const existing = uniqueMap.get(key);
+    if (!existing) {
+      uniqueMap.set(key, event);
+      return;
+    }
+    const existingTime = new Date(existing.startTime).getTime();
+    const nextTime = new Date(event.startTime).getTime();
+    if (!Number.isNaN(nextTime) && (Number.isNaN(existingTime) || nextTime > existingTime)) {
+      uniqueMap.set(key, event);
+    }
+  });
+
+  return Array.from(uniqueMap.values())
+    .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
+    .slice(0, limit);
+}
+
+function populatePastEventList() {
+  const list = safeGetElementById('pastEventList');
+  if (!list) return;
+
+  list.innerHTML = '';
+  const candidates = getEventTemplates();
+
+  if (candidates.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'past-event-empty';
+    empty.textContent = 'No events available yet.';
+    list.appendChild(empty);
+    return;
+  }
+
+  candidates.forEach((event) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'past-event-item';
+    item.dataset.title = event.title || '';
+    item.dataset.color = event.color || '#3b82f6';
+    item.setAttribute('role', 'option');
+    const titleLabel = event.title || '(No title)';
+    item.textContent = titleLabel;
+    list.appendChild(item);
+  });
+}
+
+function bindPastEventList() {
+  const list = safeGetElementById('pastEventList');
+  if (!list || list.dataset.bound === 'true') return;
+  list.dataset.bound = 'true';
+
+  list.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (!target.classList.contains('past-event-item')) return;
+
+    list.querySelectorAll('.past-event-item.is-selected').forEach((el) => {
+      el.classList.remove('is-selected');
+    });
+    target.classList.add('is-selected');
+
+    const titleInput = safeGetElementById('eventTitle');
+    if (titleInput) {
+      titleInput.value = target.dataset.title || '';
+    }
+
+    const colorValue = target.dataset.color || '#3b82f6';
+    setColorSelection(colorValue);
+  });
+}
+
+function setColorSelection(colorValue) {
+  const radios = document.querySelectorAll('input[name="color"]');
+  if (!radios || radios.length === 0) return;
+  let matched = false;
+  radios.forEach((radio) => {
+    if (radio.value === colorValue) {
+      radio.checked = true;
+      matched = true;
+    } else {
+      radio.checked = false;
+    }
+  });
+  if (!matched) {
+    const fallback = Array.from(radios).find((radio) => radio.value === '#3b82f6') || radios[0];
+    if (fallback) fallback.checked = true;
+  }
 }
 
 function syncEventElements(container, events, cacheMap, { variant, positionEvent, positionContext } = {}) {
@@ -2711,6 +3426,13 @@ function positionEventInDayView(element, event, targetDate = null) {
 
 // Show modal
 function showEventModal(eventId = null) {
+  // Prevent editing of shifts
+  if (eventId && typeof eventId === 'string' && eventId.startsWith('shift_')) {
+    // Shifts are managed by pt app, so editing is not allowed in scdl_mgr app
+    showMessage('Please edit shifts in the Part-Time Tracker app.', 'info', 3000);
+    return;
+  }
+  
   const modal = safeGetElementById('eventModal');
   const modalTitle = safeGetElementById('modalTitle');
   const form = safeGetElementById('eventForm');
@@ -2726,6 +3448,8 @@ function showEventModal(eventId = null) {
   const allDayRow = safeGetElementById('allDayDateRow');
   const allDayStartInput = safeGetElementById('eventAllDayStart');
   const allDayEndInput = safeGetElementById('eventAllDayEnd');
+  const pastEventSection = safeGetElementById('pastEventSection');
+  const pastEventList = safeGetElementById('pastEventList');
   
   // Check required elements
   if (!modal || !modalTitle || !form || !startDateInput || !startHourInput || !startMinuteInput || 
@@ -2805,6 +3529,9 @@ function showEventModal(eventId = null) {
       }
     }
     
+    if (pastEventSection) pastEventSection.classList.add('hidden');
+    if (pastEventList) pastEventList.innerHTML = '';
+
     // Set form values
     const titleInput = safeGetElementById('eventTitle');
     if (titleInput) titleInput.value = event.title || '';
@@ -2826,8 +3553,7 @@ function showEventModal(eventId = null) {
     }
     
     // Set color
-    const colorRadio = document.querySelector(`input[name="color"][value="${event.color}"]`);
-    if (colorRadio) colorRadio.checked = true;
+    setColorSelection(event.color || '#3b82f6');
     
     // Set recurrence
     const recurrenceSelect = safeGetElementById('eventRecurrence');
@@ -2869,8 +3595,11 @@ function showEventModal(eventId = null) {
     if (descInput) descInput.value = '';
     
     // Reset color to default (blue)
-    const defaultColorRadio = document.querySelector('input[name="color"][value="#3b82f6"]');
-    if (defaultColorRadio) defaultColorRadio.checked = true;
+    setColorSelection('#3b82f6');
+
+    if (pastEventSection) pastEventSection.classList.remove('hidden');
+    populatePastEventList();
+    bindPastEventList();
     
       // Keep existing values for temporary events
       if (eventId && typeof eventId === 'string' && eventId.startsWith('temp-')) {
@@ -2895,8 +3624,7 @@ function showEventModal(eventId = null) {
           }
           
           // Set color
-          const colorRadio = document.querySelector(`input[name="color"][value="${event.color}"]`);
-          if (colorRadio) colorRadio.checked = true;
+          setColorSelection(event.color || '#3b82f6');
         }
       } else {
         // Set default datetime values (current date/time, rounded to nearest 15 minutes)
@@ -3024,14 +3752,10 @@ function renderMonthView() {
   
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
-  
-  // First and last day of month
-  const firstDay = new Date(year, month, 1);
-  const lastDay = new Date(year, month + 1, 0);
-  
-  // Start date of first week of month (Sunday)
-  const startDate = new Date(firstDay);
-  startDate.setDate(startDate.getDate() - firstDay.getDay());
+
+  const { start: startDate, end: endDate } = getMonthViewVisibleRange(currentDate);
+  monthViewRangeStart = startDate;
+  monthViewRangeEnd = endDate;
   
   // Generate dates for 6 weeks
   for (let week = 0; week < 6; week++) {
@@ -4104,6 +4828,17 @@ document.addEventListener('DOMContentLoaded', function() {
   // Load events
   loadEvents();
   
+  // Load workplaces from pt app (load first to correctly set shift colors)
+  loadWorkplaces();
+  
+  // Load shifts from pt app
+  loadShifts();
+
+  // Load timetable/tasks from combi app
+  loadCombiSemesters();
+  loadCombiCurrentSemesterId();
+  loadCombiTasks();
+  
   // Register event listeners
   setupEventListeners();
 
@@ -4121,6 +4856,18 @@ window.addEventListener('beforeunload', () => {
   if (typeof unsubscribeEvents === 'function') {
     unsubscribeEvents();
     unsubscribeEvents = null;
+  }
+  if (typeof unsubscribeCombiSemesters === 'function') {
+    unsubscribeCombiSemesters();
+    unsubscribeCombiSemesters = null;
+  }
+  if (typeof unsubscribeCombiCurrentSemester === 'function') {
+    unsubscribeCombiCurrentSemester();
+    unsubscribeCombiCurrentSemester = null;
+  }
+  if (typeof unsubscribeCombiTasks === 'function') {
+    unsubscribeCombiTasks();
+    unsubscribeCombiTasks = null;
   }
   // Cleanup all event listeners
   eventListeners.removeAll();
@@ -5273,7 +6020,32 @@ function attachResizeHandlers() {
     }
     item.dataset.resizeBound = 'true';
     const id = item.dataset.eventId;
+    
+    // Check if this is a shift (read-only)
+    const isShift = item.dataset.isShift === 'true' || (id && typeof id === 'string' && id.startsWith('shift_'));
+    if (isShift) {
+      // Shifts are read-only, skip resize handlers
+      const topHandle = item.querySelector('.resize-handle.top');
+      const bottomHandle = item.querySelector('.resize-handle.bottom');
+      if (topHandle) topHandle.style.display = 'none';
+      if (bottomHandle) bottomHandle.style.display = 'none';
+      return;
+    }
+    
     const eventData = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
+    // Also check shifts array for shift events
+    if (!eventData && Array.isArray(shifts)) {
+      const shiftData = shifts.find(s => s.id === id);
+      if (shiftData && (shiftData.isShift === true || (id && typeof id === 'string' && id.startsWith('shift_')))) {
+        // This is a shift, skip resize handlers
+        const topHandle = item.querySelector('.resize-handle.top');
+        const bottomHandle = item.querySelector('.resize-handle.bottom');
+        if (topHandle) topHandle.style.display = 'none';
+        if (bottomHandle) bottomHandle.style.display = 'none';
+        return;
+      }
+    }
+    
     const topHandle = item.querySelector('.resize-handle.top');
     const bottomHandle = item.querySelector('.resize-handle.bottom');
     if (!eventData) return;

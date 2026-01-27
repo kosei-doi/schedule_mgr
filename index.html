@@ -316,6 +316,12 @@
                 </div>
                 <form id="eventForm" class="event-form">
                     <div class="form-section main-section">
+                        <div class="form-section past-event-section" id="pastEventSection">
+                            <div class="form-group compact">
+                                <label>Use Existing Event</label>
+                                <div id="pastEventList" class="past-event-list" role="listbox" aria-label="Select an existing event"></div>
+                            </div>
+                        </div>
                         <div class="form-group">
                             <label for="eventTitle">Title *</label>
                             <input type="text" id="eventTitle" name="title" required maxlength="100" aria-required="true">
@@ -368,18 +374,36 @@
                         <div class="form-group compact">
                             <label>Color</label>
                             <div class="color-picker" role="radiogroup" aria-label="Select event color">
-                                <input type="radio" id="color-blue" name="color" value="#3b82f6" checked>
-                                <label for="color-blue" class="color-option" style="background-color: #3b82f6;" aria-label="Blue"></label>
-                                <input type="radio" id="color-green" name="color" value="#10b981">
-                                <label for="color-green" class="color-option" style="background-color: #10b981;" aria-label="Green"></label>
-                                <input type="radio" id="color-yellow" name="color" value="#f59e0b">
-                                <label for="color-yellow" class="color-option" style="background-color: #f59e0b;" aria-label="Yellow"></label>
-                                <input type="radio" id="color-red" name="color" value="#ef4444">
-                                <label for="color-red" class="color-option" style="background-color: #ef4444;" aria-label="Red"></label>
-                                <input type="radio" id="color-purple" name="color" value="#8b5cf6">
-                                <label for="color-purple" class="color-option" style="background-color: #8b5cf6;" aria-label="Purple"></label>
-                                <input type="radio" id="color-pink" name="color" value="#ec4899">
-                                <label for="color-pink" class="color-option" style="background-color: #ec4899;" aria-label="Pink"></label>
+                                <div class="color-choice">
+                                    <input type="radio" id="color-blue" name="color" value="#3b82f6" checked>
+                                    <label for="color-blue" class="color-option" style="background-color: #3b82f6;" aria-label="Tasks"></label>
+                                    <span class="color-label">Tasks</span>
+                                </div>
+                                <div class="color-choice">
+                                    <input type="radio" id="color-green" name="color" value="#10b981">
+                                    <label for="color-green" class="color-option" style="background-color: #10b981;" aria-label="Events"></label>
+                                    <span class="color-label">Events</span>
+                                </div>
+                                <div class="color-choice">
+                                    <input type="radio" id="color-yellow" name="color" value="#f59e0b">
+                                    <label for="color-yellow" class="color-option" style="background-color: #f59e0b;" aria-label="Routines"></label>
+                                    <span class="color-label">Routines</span>
+                                </div>
+                                <div class="color-choice">
+                                    <input type="radio" id="color-red" name="color" value="#ef4444">
+                                    <label for="color-red" class="color-option" style="background-color: #ef4444;" aria-label="Exercise"></label>
+                                    <span class="color-label">Exercise</span>
+                                </div>
+                                <div class="color-choice">
+                                    <input type="radio" id="color-purple" name="color" value="#8b5cf6">
+                                    <label for="color-purple" class="color-option" style="background-color: #8b5cf6;" aria-label="Play"></label>
+                                    <span class="color-label">Play</span>
+                                </div>
+                                <div class="color-choice">
+                                    <input type="radio" id="color-pink" name="color" value="#ec4899">
+                                    <label for="color-pink" class="color-option" style="background-color: #ec4899;" aria-label="Rest"></label>
+                                    <span class="color-label">Rest</span>
+                                </div>
                             </div>
                         </div>
                         <div class="form-row compact-row">
@@ -429,8 +453,8 @@
                     </div>
                     
                     <div class="form-actions">
-                        <button type="submit" class="btn btn-primary">Save</button>
                         <button type="button" id="deleteBtn" class="btn btn-danger" style="display: none;">Delete</button>
+                        <button type="submit" class="btn btn-primary">Save</button>
                     </div>
                 </form>
             </div>
