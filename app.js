@@ -41,6 +41,9 @@ const eventListeners = {
 let events = [];
 let shifts = []; // Shift data from pt app (managed separately from events)
 let workplaces = []; // Workplace data from pt app
+let mealWeeklyPlan = {}; // Weekly meal plan data from diet app (read-only)
+let mealInventory = {}; // Inventory data from diet app (read-only)
+let mealEvents = []; // Derived meal events for schedule display
 let combiSemesters = [];
 let combiCurrentSemesterId = null;
 let combiTimetableEvents = [];
@@ -78,6 +81,12 @@ const COMBI_PERIOD_TIMES = [
   { start: '15:00', end: '16:40' },
   { start: '16:50', end: '18:30' },
 ];
+const MEAL_TIME_SLOTS = {
+  breakfast: { label: 'Breakfast', start: '08:00', durationMinutes: 45 },
+  lunch: { label: 'Lunch', start: '12:30', durationMinutes: 45 },
+  dinner: { label: 'Dinner', start: '19:00', durationMinutes: 45 },
+};
+const MEAL_EVENT_COLOR = '#dbeafe';
 
 // Get actual height of time slot (1 hour)
 function getHourHeight() {
@@ -616,6 +625,67 @@ function normalizeShiftFromSnapshot(snapshot, key) {
   return null;
 }
 
+function buildMealEventId(dateStr, mealKey) {
+  if (!dateStr || !mealKey) return '';
+  return `meal_${dateStr}_${mealKey}`;
+}
+
+function buildMealEvent(dateStr, mealKey, itemId) {
+  if (!dateStr || !mealKey || !itemId) return null;
+  const slot = MEAL_TIME_SLOTS[mealKey] || { label: mealKey, start: '12:00', durationMinutes: 30 };
+  const startBase = new Date(`${dateStr}T${slot.start}`);
+  if (Number.isNaN(startBase.getTime())) return null;
+  const endBase = new Date(startBase.getTime() + (slot.durationMinutes || 30) * 60000);
+  const mealItem = mealInventory && typeof mealInventory === 'object' ? mealInventory[itemId] : null;
+  const itemName = mealItem?.name || 'Meal';
+  return {
+    id: buildMealEventId(dateStr, mealKey),
+    title: itemName,
+    description: 'Meal plan (read-only)',
+    startTime: formatDateTimeLocal(startBase),
+    endTime: formatDateTimeLocal(endBase),
+    color: MEAL_EVENT_COLOR,
+    allDay: false,
+    isMeal: true,
+    source: 'diet_mgr',
+  };
+}
+
+function rebuildMealEvents() {
+  const allowedRanges = getAllowedDateRanges();
+  const nextEvents = [];
+  if (mealWeeklyPlan && typeof mealWeeklyPlan === 'object') {
+    const mealIndexMap = {
+      0: 'breakfast',
+      1: 'lunch',
+      2: 'dinner',
+    };
+    Object.entries(mealWeeklyPlan).forEach(([key, itemId]) => {
+      if (!key || !itemId) return;
+      const lastDash = key.lastIndexOf('-');
+      if (lastDash <= 0) return;
+      const dateStr = key.slice(0, lastDash);
+      const mealIndex = Number(key.slice(lastDash + 1));
+      if (!dateStr || Number.isNaN(mealIndex)) return;
+      const mealKey = mealIndexMap[mealIndex];
+      if (!mealKey) return;
+      const event = buildMealEvent(dateStr, mealKey, itemId);
+      if (!event) return;
+      if (!isEventInAllowedRange(event, allowedRanges)) return;
+      nextEvents.push(event);
+    });
+  }
+  nextEvents.sort((a, b) => {
+    const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
+    const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
+    if (Number.isNaN(aTime)) return 1;
+    if (Number.isNaN(bTime)) return -1;
+    return aTime - bTime;
+  });
+  mealEvents = nextEvents;
+  updateViews();
+}
+
 // Load events function (incremental update version)
 async function loadEvents() {
   if (!isFirebaseEnabled || !window.firebase?.db) {
@@ -848,6 +918,16 @@ let unsubscribeShiftAdded = null;
 let unsubscribeShiftChanged = null;
 let unsubscribeShiftRemoved = null;
 
+// Load meal plans from diet app
+let unsubscribeMeals = null;
+let unsubscribeMealAdded = null;
+let unsubscribeMealChanged = null;
+let unsubscribeMealRemoved = null;
+let unsubscribeMealInventory = null;
+let unsubscribeMealInventoryAdded = null;
+let unsubscribeMealInventoryChanged = null;
+let unsubscribeMealInventoryRemoved = null;
+
 let unsubscribeCombiSemesters = null;
 let unsubscribeCombiCurrentSemester = null;
 let unsubscribeCombiTasks = null;
@@ -1001,6 +1081,181 @@ async function loadShifts() {
     if (typeof unsubscribeShiftRemoved === 'function') {
       unsubscribeShiftRemoved();
       unsubscribeShiftRemoved = null;
+    }
+  };
+}
+
+async function loadMealSchedules() {
+  if (!isFirebaseEnabled || !window.firebase?.db) {
+    return;
+  }
+
+  // Unsubscribe existing listeners
+  if (typeof unsubscribeMeals === 'function') {
+    unsubscribeMeals();
+    unsubscribeMeals = null;
+  }
+  if (typeof unsubscribeMealAdded === 'function') {
+    unsubscribeMealAdded();
+    unsubscribeMealAdded = null;
+  }
+  if (typeof unsubscribeMealChanged === 'function') {
+    unsubscribeMealChanged();
+    unsubscribeMealChanged = null;
+  }
+  if (typeof unsubscribeMealRemoved === 'function') {
+    unsubscribeMealRemoved();
+    unsubscribeMealRemoved = null;
+  }
+  if (typeof unsubscribeMealInventory === 'function') {
+    unsubscribeMealInventory();
+    unsubscribeMealInventory = null;
+  }
+  if (typeof unsubscribeMealInventoryAdded === 'function') {
+    unsubscribeMealInventoryAdded();
+    unsubscribeMealInventoryAdded = null;
+  }
+  if (typeof unsubscribeMealInventoryChanged === 'function') {
+    unsubscribeMealInventoryChanged();
+    unsubscribeMealInventoryChanged = null;
+  }
+  if (typeof unsubscribeMealInventoryRemoved === 'function') {
+    unsubscribeMealInventoryRemoved();
+    unsubscribeMealInventoryRemoved = null;
+  }
+
+  const weeklyPlanRef = window.firebase.ref(window.firebase.db, "weeklyPlan");
+  const inventoryRef = window.firebase.ref(window.firebase.db, "inventory");
+
+  // Initial load
+  try {
+    const [weeklySnapshot, inventorySnapshot] = await Promise.all([
+      window.firebase.get(weeklyPlanRef),
+      window.firebase.get(inventoryRef),
+    ]);
+    const weeklyData = weeklySnapshot.val();
+    const inventoryData = inventorySnapshot.val();
+    mealWeeklyPlan = (weeklyData && typeof weeklyData === 'object' && !Array.isArray(weeklyData)) ? weeklyData : {};
+    mealInventory = (inventoryData && typeof inventoryData === 'object' && !Array.isArray(inventoryData)) ? inventoryData : {};
+    rebuildMealEvents();
+  } catch (error) {
+    console.error('Failed to load meal schedules:', error);
+    return;
+  }
+
+  // Meal plan updates
+  unsubscribeMealAdded = window.firebase.onChildAdded(weeklyPlanRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      const payload = snapshot.val() || {};
+      if (!mealWeeklyPlan || typeof mealWeeklyPlan !== 'object') mealWeeklyPlan = {};
+      if (mealWeeklyPlan[key] === undefined) {
+        mealWeeklyPlan[key] = payload;
+        rebuildMealEvents();
+      }
+    } catch (error) {
+      console.error('Failed to add meal schedule:', error);
+    }
+  });
+
+  unsubscribeMealChanged = window.firebase.onChildChanged(weeklyPlanRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      const payload = snapshot.val() || {};
+      if (!mealWeeklyPlan || typeof mealWeeklyPlan !== 'object') mealWeeklyPlan = {};
+      mealWeeklyPlan[key] = payload;
+      rebuildMealEvents();
+    } catch (error) {
+      console.error('Failed to update meal schedule:', error);
+    }
+  });
+
+  unsubscribeMealRemoved = window.firebase.onChildRemoved(weeklyPlanRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      if (mealWeeklyPlan && typeof mealWeeklyPlan === 'object' && mealWeeklyPlan[key] !== undefined) {
+        delete mealWeeklyPlan[key];
+        rebuildMealEvents();
+      }
+    } catch (error) {
+      console.error('Failed to remove meal schedule:', error);
+    }
+  });
+
+  unsubscribeMeals = () => {
+    if (typeof unsubscribeMealAdded === 'function') {
+      unsubscribeMealAdded();
+      unsubscribeMealAdded = null;
+    }
+    if (typeof unsubscribeMealChanged === 'function') {
+      unsubscribeMealChanged();
+      unsubscribeMealChanged = null;
+    }
+    if (typeof unsubscribeMealRemoved === 'function') {
+      unsubscribeMealRemoved();
+      unsubscribeMealRemoved = null;
+    }
+  };
+
+  // Inventory updates for meal names
+  unsubscribeMealInventoryAdded = window.firebase.onChildAdded(inventoryRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      const payload = snapshot.val() || {};
+      if (typeof payload !== 'object') return;
+      if (!mealInventory || typeof mealInventory !== 'object') mealInventory = {};
+      if (!mealInventory[key]) {
+        mealInventory[key] = payload;
+        rebuildMealEvents();
+      }
+    } catch (error) {
+      console.error('Failed to add meal inventory item:', error);
+    }
+  });
+
+  unsubscribeMealInventoryChanged = window.firebase.onChildChanged(inventoryRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      const payload = snapshot.val() || {};
+      if (typeof payload !== 'object') return;
+      if (!mealInventory || typeof mealInventory !== 'object') mealInventory = {};
+      mealInventory[key] = payload;
+      rebuildMealEvents();
+    } catch (error) {
+      console.error('Failed to update meal inventory item:', error);
+    }
+  });
+
+  unsubscribeMealInventoryRemoved = window.firebase.onChildRemoved(inventoryRef, (snapshot) => {
+    try {
+      const key = snapshot.key;
+      if (!key) return;
+      if (mealInventory && typeof mealInventory === 'object' && mealInventory[key]) {
+        delete mealInventory[key];
+        rebuildMealEvents();
+      }
+    } catch (error) {
+      console.error('Failed to remove meal inventory item:', error);
+    }
+  });
+
+  unsubscribeMealInventory = () => {
+    if (typeof unsubscribeMealInventoryAdded === 'function') {
+      unsubscribeMealInventoryAdded();
+      unsubscribeMealInventoryAdded = null;
+    }
+    if (typeof unsubscribeMealInventoryChanged === 'function') {
+      unsubscribeMealInventoryChanged();
+      unsubscribeMealInventoryChanged = null;
+    }
+    if (typeof unsubscribeMealInventoryRemoved === 'function') {
+      unsubscribeMealInventoryRemoved();
+      unsubscribeMealInventoryRemoved = null;
     }
   };
 }
@@ -2764,6 +3019,20 @@ function getEventsByDate(date) {
     });
   }
 
+  if (Array.isArray(mealEvents)) {
+    mealEvents.forEach(meal => {
+      if (!meal || !meal.id) return;
+      if (!meal.startTime) return;
+
+      const mealStart = new Date(meal.startTime);
+      const mealEnd = meal.endTime ? new Date(meal.endTime) : mealStart;
+      if (Number.isNaN(mealStart.getTime()) || Number.isNaN(mealEnd.getTime())) return;
+      if (mealStart <= targetDateEnd && mealEnd >= targetDate) {
+        list.push(meal);
+      }
+    });
+  }
+
   if (Array.isArray(combiTimetableEvents)) {
     combiTimetableEvents.forEach(ev => {
       if (!ev || !ev.id) return;
@@ -3026,11 +3295,14 @@ function populateEventElement(element, event, options = {}) {
   const { variant } = options;
   const isAllDay = variant === 'all-day' || isAllDayEvent(event);
   const isShift = event.isShift === true || (event.id && typeof event.id === 'string' && event.id.startsWith('shift_'));
+  const isMeal = event.isMeal === true || (event.id && typeof event.id === 'string' && event.id.startsWith('meal_'));
+  const isReadOnly = isShift || isMeal;
   
   element.className = 'event-item';
   if (isAllDay) element.classList.add('all-day');
   if (event.isTimetable === true) element.classList.add('timetable-event');
-  if (isShift) element.classList.add('readonly-event'); // Add readonly class for shifts
+  if (isReadOnly) element.classList.add('readonly-event'); // Add readonly class for read-only items
+  if (isMeal) element.classList.add('meal-event');
   element.style.backgroundColor = event.color || '#3b82f6';
   element.dataset.eventId = event.id;
   if (event.isTimetable === true) {
@@ -3042,6 +3314,11 @@ function populateEventElement(element, event, options = {}) {
     element.dataset.isShift = 'true';
   } else {
     delete element.dataset.isShift;
+  }
+  if (isMeal) {
+    element.dataset.isMeal = 'true';
+  } else {
+    delete element.dataset.isMeal;
   }
   if (isAllDay) {
     element.dataset.allDay = 'true';
@@ -3055,16 +3332,16 @@ function populateEventElement(element, event, options = {}) {
   const displayTitle = truncateText(fullTitle, 30);
 
   if (isAllDay) {
-    element.setAttribute('aria-label', `${fullTitle} (All day)${isShift ? ' (Read-only)' : ''}`);
+    element.setAttribute('aria-label', `${fullTitle} (All day)${isReadOnly ? ' (Read-only)' : ''}`);
     element.innerHTML = `
       <div class="event-title">${escapeHtml(displayTitle)}</div>
     `;
   } else {
     const startLabel = event.startTime ? formatTime(event.startTime) : '--:--';
     const endLabel = event.endTime ? formatTime(event.endTime) : '--:--';
-    element.setAttribute('aria-label', `${fullTitle}, ${startLabel} to ${endLabel}${isShift ? ' (Read-only)' : ''}`);
-    // Hide resize handles for shifts (read-only)
-    const resizeHandlesHtml = isShift ? '' : `
+    element.setAttribute('aria-label', `${fullTitle}, ${startLabel} to ${endLabel}${isReadOnly ? ' (Read-only)' : ''}`);
+    // Hide resize handles for read-only items
+    const resizeHandlesHtml = isReadOnly ? '' : `
       <div class="resize-handle top"></div>
       <div class="resize-handle bottom"></div>
     `;
@@ -3430,6 +3707,10 @@ function showEventModal(eventId = null) {
   if (eventId && typeof eventId === 'string' && eventId.startsWith('shift_')) {
     // Shifts are managed by pt app, so editing is not allowed in scdl_mgr app
     showMessage('Please edit shifts in the Part-Time Tracker app.', 'info', 3000);
+    return;
+  }
+  if (eventId && typeof eventId === 'string' && eventId.startsWith('meal_')) {
+    showMessage('Please edit meals in the Meal Planner app.', 'info', 3000);
     return;
   }
   
@@ -3798,7 +4079,7 @@ function createMonthDayElement(date, currentMonth) {
   
   // Events for that day (timetable events are hidden in month view)
   const dayEvents = getEventsByDate(date);
-  const visibleEvents = dayEvents.filter(event => event.isTimetable !== true);
+  const visibleEvents = dayEvents.filter(event => event.isTimetable !== true && event.isMeal !== true);
 
   if (visibleEvents.length > 0) {
     const eventsContainer = document.createElement('div');
@@ -4834,6 +5115,9 @@ document.addEventListener('DOMContentLoaded', function() {
   // Load shifts from pt app
   loadShifts();
 
+  // Load meal schedules from diet app
+  loadMealSchedules();
+
   // Load timetable/tasks from combi app
   loadCombiSemesters();
   loadCombiCurrentSemesterId();
@@ -4868,6 +5152,14 @@ window.addEventListener('beforeunload', () => {
   if (typeof unsubscribeCombiTasks === 'function') {
     unsubscribeCombiTasks();
     unsubscribeCombiTasks = null;
+  }
+  if (typeof unsubscribeMeals === 'function') {
+    unsubscribeMeals();
+    unsubscribeMeals = null;
+  }
+  if (typeof unsubscribeMealInventory === 'function') {
+    unsubscribeMealInventory();
+    unsubscribeMealInventory = null;
   }
   // Cleanup all event listeners
   eventListeners.removeAll();
@@ -6022,9 +6314,11 @@ function attachResizeHandlers() {
     const id = item.dataset.eventId;
     
     // Check if this is a shift (read-only)
-    const isShift = item.dataset.isShift === 'true' || (id && typeof id === 'string' && id.startsWith('shift_'));
-    if (isShift) {
-      // Shifts are read-only, skip resize handlers
+    const isReadOnly = item.dataset.isShift === 'true'
+      || item.dataset.isMeal === 'true'
+      || (id && typeof id === 'string' && (id.startsWith('shift_') || id.startsWith('meal_')));
+    if (isReadOnly) {
+      // Read-only items, skip resize handlers
       const topHandle = item.querySelector('.resize-handle.top');
       const bottomHandle = item.querySelector('.resize-handle.bottom');
       if (topHandle) topHandle.style.display = 'none';
@@ -6033,11 +6327,21 @@ function attachResizeHandlers() {
     }
     
     const eventData = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
-    // Also check shifts array for shift events
+    // Also check shifts/meal arrays for read-only events
     if (!eventData && Array.isArray(shifts)) {
       const shiftData = shifts.find(s => s.id === id);
       if (shiftData && (shiftData.isShift === true || (id && typeof id === 'string' && id.startsWith('shift_')))) {
         // This is a shift, skip resize handlers
+        const topHandle = item.querySelector('.resize-handle.top');
+        const bottomHandle = item.querySelector('.resize-handle.bottom');
+        if (topHandle) topHandle.style.display = 'none';
+        if (bottomHandle) bottomHandle.style.display = 'none';
+        return;
+      }
+    }
+    if (!eventData && Array.isArray(mealEvents)) {
+      const mealData = mealEvents.find(m => m.id === id);
+      if (mealData && (mealData.isMeal === true || (id && typeof id === 'string' && id.startsWith('meal_')))) {
         const topHandle = item.querySelector('.resize-handle.top');
         const bottomHandle = item.querySelector('.resize-handle.bottom');
         if (topHandle) topHandle.style.display = 'none';
