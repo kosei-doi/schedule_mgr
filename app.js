@@ -592,7 +592,6 @@ function normalizeShiftFromSnapshot(snapshot, key) {
   if (typeof payload !== 'object') {
     return null;
   }
-  
   // Shift data format: {date, start, end, workplaceId, workplaceName, role, notes, rate}
   if (payload.date && payload.start && payload.end) {
     const startTime = `${payload.date}T${payload.start}`;
@@ -3071,7 +3070,7 @@ function getEventsByDate(date) {
       }
     });
   }
-  
+
   return list;
 }
 
@@ -3129,6 +3128,8 @@ function renderDayView() {
 
   const dayEvents = getEventsByDate(currentDate);
   const { allDayEvents, timedEvents } = splitEventsByAllDay(dayEvents);
+  const shiftEvents = timedEvents.filter(event => event?.isShift === true);
+  const mealEventsForDay = timedEvents.filter(event => event?.isMeal === true);
 
   if (allDayContainer) {
     const sortedAllDay = [...allDayEvents].sort((a, b) => {
@@ -3153,7 +3154,6 @@ function renderDayView() {
   sortedTimed.forEach((event, index) => {
     groupMap.set(event.id, groups[index]);
   });
-
   syncEventElements(container, sortedTimed, viewCaches.day.timed, {
     positionEvent: (element, event) => {
       positionEventInDayView(element, event, currentDate);
@@ -3205,6 +3205,8 @@ function renderWeekView() {
     
     const dayEvents = getEventsByDate(dayDate);
     const { allDayEvents, timedEvents } = splitEventsByAllDay(dayEvents);
+    const shiftEvents = timedEvents.filter(event => event?.isShift === true);
+    const mealEventsForDay = timedEvents.filter(event => event?.isMeal === true);
     
     if (allDayColumn) {
       const sortedAllDay = [...allDayEvents].sort((a, b) => {
@@ -3229,7 +3231,6 @@ function renderWeekView() {
     sortedTimed.forEach((event, index) => {
       groupMap.set(event.id, groups[index]);
     });
-    
     syncEventElements(eventsContainer, sortedTimed, viewCaches.week.timed[i], {
       positionEvent: (element, event) => {
         positionEventInDayView(element, event, dayDate);
@@ -3599,7 +3600,7 @@ function positionEventInDayView(element, event, targetDate = null) {
   // For events that span days, only display the portion within current day range
   const displayStart = startTime < currentDay ? currentDay : startTime;
   const displayEnd = endTime > currentDayEnd ? currentDayEnd : endTime;
-  
+
   // Don't display anything if display range doesn't overlap with current day
   if (displayStart >= currentDayEnd || displayEnd <= currentDay) {
     element.style.display = 'none';
@@ -4491,6 +4492,9 @@ function isAllDayEvent(event) {
 function splitEventsByAllDay(eventList = []) {
   const allDayEvents = [];
   const timedEvents = [];
+  const invalidEvents = [];
+  let readOnlyAllDayCount = 0;
+  let readOnlyTimedCount = 0;
   eventList.forEach((event) => {
     const lacksTime =
       !event?.startTime ||
@@ -4499,8 +4503,17 @@ function splitEventsByAllDay(eventList = []) {
       Number.isNaN(new Date(event.endTime).getTime());
     if (isAllDayEvent(event) || lacksTime) {
       allDayEvents.push(event);
+      if (event?.isShift === true || event?.isMeal === true) {
+        readOnlyAllDayCount += 1;
+      }
+      if (lacksTime) {
+        invalidEvents.push(event);
+      }
     } else {
       timedEvents.push(event);
+      if (event?.isShift === true || event?.isMeal === true) {
+        readOnlyTimedCount += 1;
+      }
     }
   });
   return { allDayEvents, timedEvents };

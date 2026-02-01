@@ -615,7 +615,7 @@ body {
 .event-item.readonly-event {
   cursor: not-allowed;
   opacity: 0.9;
-  position: relative;
+  position: absolute;
 }
 
 .event-item.meal-event {
