@@ -9,6 +9,60 @@ const CALENDAR_ID = 'primary';
 const DESCRIPTION_TAG = 'schedule_mgr_id:';
 const DESCRIPTION_REGEX = new RegExp(`${DESCRIPTION_TAG}([\\w-]+)`, 'i');
 
+// Firebase Realtime Database (shared with schedule_mgr and timetable app)
+// NOTE: If your database requires auth for server-side access, set FIREBASE_DB_AUTH
+// to a database secret or an OAuth token and uncomment the auth parameter usage below.
+// For open/readable rules, leave FIREBASE_DB_AUTH as null.
+const FIREBASE_DB_URL = 'https://manager-8ac68-default-rtdb.asia-southeast1.firebasedatabase.app';
+const FIREBASE_DB_AUTH = null; // e.g. 'YOUR_DB_SECRET_OR_TOKEN'
+
+/**
+ * Fetch JSON data from Firebase Realtime Database via REST API.
+ * @param {string} path - Database path without leading slash, e.g. 'events'
+ * @returns {any} Parsed JSON payload or null.
+ */
+function fetchFromFirebase(path) {
+  if (!FIREBASE_DB_URL) {
+    throw new Error('FIREBASE_DB_URL is not configured.');
+  }
+
+  var base = FIREBASE_DB_URL.replace(/\/+$/, '');
+  var cleanPath = String(path || '').replace(/^\/+/, '');
+  var url = base + '/' + cleanPath + '.json';
+
+  if (FIREBASE_DB_AUTH) {
+    url += '?auth=' + encodeURIComponent(FIREBASE_DB_AUTH);
+  }
+
+  var response;
+  try {
+    response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  } catch (error) {
+    throw new Error('Failed to fetch from Firebase at path "' + path + '": ' + error);
+  }
+
+  var statusCode = response.getResponseCode();
+  if (statusCode < 200 || statusCode >= 300) {
+    throw new Error(
+      'Firebase responded with HTTP ' +
+        statusCode +
+        ' for path "' +
+        path +
+        '": ' +
+        response.getContentText()
+    );
+  }
+
+  var text = response.getContentText();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error('Failed to parse Firebase JSON for path "' + path + '": ' + error);
+  }
+}
+
 function doPost(e) {
   try {
     if (!e?.postData?.contents) {
@@ -27,11 +81,9 @@ function doPost(e) {
       return processMutations(calendar, payload);
     }
 
-    const events = Array.isArray(payload?.events) ? payload.events : [];
-    if (events.length === 0) {
-      return buildResponse({ success: true, message: 'No events to process.', created: 0, updated: 0, skipped: 0 });
-    }
+    const payloadEvents = Array.isArray(payload?.events) ? payload.events : [];
 
+    // Calculate sync window (current month + next 2 months)
     const windowStart = new Date();
     windowStart.setDate(1); // First day of current month
     windowStart.setHours(0, 0, 0, 0);
@@ -40,6 +92,18 @@ function doPost(e) {
     // End of month 2 months later (current month + 2) at 23:59:59
     windowEnd.setMonth(windowEnd.getMonth() + 3, 0);
     windowEnd.setHours(23, 59, 59, 999);
+
+    // Read timetable events directly from Firebase (shared events node with isTimetable === true)
+    const timetableEvents = getTimetableEventsInWindow(windowStart, windowEnd);
+    // Read part-time job shifts directly from Firebase (shifts node of pt app)
+    const shiftEvents = getShiftEventsInWindow(windowStart, windowEnd);
+
+    // Combine front-end schedule_mgr events with timetable- and shift-derived events
+    const events = payloadEvents.concat(timetableEvents, shiftEvents);
+
+    if (events.length === 0) {
+      return buildResponse({ success: true, message: 'No events to process.', created: 0, updated: 0, skipped: 0 });
+    }
 
     const existingEvents = calendar.getEvents(windowStart, windowEnd, { search: DESCRIPTION_TAG });
     let existingMap = buildExistingMap(existingEvents);
@@ -411,6 +475,170 @@ function buildExistingMap(events) {
     }
   });
   return { scheduleIdMap: map, googleIdMap: googleIdMap };
+}
+
+/**
+ * Fetch timetable-related events (class schedule and tasks) directly from Firebase.
+ * This implementation assumes timetable data is stored in the shared `events` node
+ * with `isTimetable === true`, written by the timetable app, and should be treated
+ * as read-only from the perspective of schedule_mgr.
+ *
+ * @param {Date} windowStart - Inclusive start of sync window
+ * @param {Date} windowEnd - Inclusive end of sync window
+ * @returns {Array<Object>} Normalized event payloads compatible with buildSyncEventPayload
+ */
+function getTimetableEventsInWindow(windowStart, windowEnd) {
+  let data;
+  try {
+    data = fetchFromFirebase('events') || {};
+  } catch (error) {
+    // If Firebase read fails, treat as no timetable events rather than failing whole sync
+    console.error('Failed to fetch timetable events from Firebase:', error);
+    return [];
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return [];
+  }
+
+  const results = [];
+  const startMs = windowStart.getTime();
+  const endMs = windowEnd.getTime();
+
+  Object.keys(data).forEach((key) => {
+    const payload = data[key];
+    if (!payload || typeof payload !== 'object') return;
+
+    // Only timetable entries
+    if (payload.isTimetable !== true) return;
+
+    const rawStart = payload.startTime || payload.startDateTime || null;
+    const rawEnd = payload.endTime || payload.endDateTime || null;
+    if (!rawStart || !rawEnd) return;
+
+    const start = new Date(rawStart);
+    const end = new Date(rawEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+
+    const startMsEvent = start.getTime();
+    const endMsEvent = end.getTime();
+    // Basic window overlap check
+    if (endMsEvent < startMs || startMsEvent > endMs) {
+      return;
+    }
+
+    const isAllDay = payload.allDay === true;
+    const title = (payload.title || '').trim() || 'Untitled';
+    const description = (payload.description || '').trim();
+    const location = (payload.location || '').trim();
+
+    // For tasks, we expect allDay true; classes are timed. We don't need
+    // to distinguish further here; the consumer treats both as normal events.
+    const eventPayload = {
+      id: `timetable_${key}`,
+      title,
+      description,
+      location,
+      startDateTime: start.toISOString(),
+      endDateTime: end.toISOString(),
+      allDay: isAllDay,
+      isTimetable: true,
+      // Timetable events are read-only; do not carry over googleEventId here.
+      reminderMinutes:
+        typeof payload.reminderMinutes === 'number' && Number.isFinite(payload.reminderMinutes)
+          ? Math.floor(payload.reminderMinutes)
+          : null,
+      color: payload.color || null,
+    };
+
+    results.push(eventPayload);
+  });
+
+  return results;
+}
+
+/**
+ * Fetch part-time job shifts directly from Firebase.
+ * Shifts are stored by the pt app under the 'shifts' node in the same database
+ * and are treated as read-only from the perspective of schedule_mgr.
+ *
+ * Expected shift payload shape (based on pt/app.js):
+ * {
+ *   date: 'YYYY-MM-DD',
+ *   start: 'HH:MM',
+ *   end: 'HH:MM',
+ *   workplaceId: string,
+ *   workplaceName: string,
+ *   role: string,
+ *   notes: string,
+ *   rate: number,
+ *   color?: string
+ * }
+ *
+ * @param {Date} windowStart - Inclusive start of sync window
+ * @param {Date} windowEnd - Inclusive end of sync window
+ * @returns {Array<Object>} Normalized event payloads compatible with buildSyncEventPayload
+ */
+function getShiftEventsInWindow(windowStart, windowEnd) {
+  let data;
+  try {
+    data = fetchFromFirebase('shifts') || {};
+  } catch (error) {
+    console.error('Failed to fetch shifts from Firebase:', error);
+    return [];
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return [];
+  }
+
+  const results = [];
+  const startMs = windowStart.getTime();
+  const endMs = windowEnd.getTime();
+
+  Object.keys(data).forEach((key) => {
+    const payload = data[key];
+    if (!payload || typeof payload !== 'object') return;
+
+    const dateStr = payload.date;
+    const startTimeStr = payload.start;
+    const endTimeStr = payload.end;
+    if (!dateStr || !startTimeStr || !endTimeStr) return;
+
+    // Build ISO-like strings: YYYY-MM-DDTHH:MM
+    const start = new Date(dateStr + 'T' + startTimeStr);
+    const end = new Date(dateStr + 'T' + endTimeStr);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+
+    const startMsEvent = start.getTime();
+    const endMsEvent = end.getTime();
+    if (endMsEvent < startMs || startMsEvent > endMs) {
+      return;
+    }
+
+    const workplaceName = (payload.workplaceName || payload.role || 'Shift').trim();
+    const title = workplaceName || 'Shift';
+    const description = (payload.notes || '').trim();
+    const location = ''; // pt app does not expose explicit location; could map workplace name here if desired
+
+    const eventPayload = {
+      id: `shift_${key}`,
+      title: title,
+      description: description,
+      location: location,
+      startDateTime: start.toISOString(),
+      endDateTime: end.toISOString(),
+      allDay: false,
+      isTimetable: false,
+      // Treat shifts as read-only: do not send googleEventId; we only create/update based on Firebase data
+      reminderMinutes: null,
+      color: payload.color || null,
+    };
+
+    results.push(eventPayload);
+  });
+
+  return results;
 }
 
 function buildDescription(eventId, description) {

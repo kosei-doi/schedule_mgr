@@ -544,10 +544,9 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  height: 10px;
+  height: 6px;
   background: transparent;
   cursor: ns-resize;
-  z-index: 2;
 }
 
 .event-item .resize-handle.top {
@@ -607,20 +606,13 @@ body {
 
 .event-item.timetable-event {
   cursor: default;
-  opacity: 0.8;
-  filter: saturate(0.7) brightness(1.05);
 }
 
 /* Read-only event (shifts from pt app) */
 .event-item.readonly-event {
   cursor: not-allowed;
   opacity: 0.9;
-  position: absolute;
-}
-
-.event-item.meal-event {
-  color: #1f2937;
-  border-left: 2px solid rgba(0, 0, 0, 0.18);
+  position: relative;
 }
 
 .event-item.readonly-event:hover {
@@ -1302,47 +1294,6 @@ body.modal-open {
   border-color: var(--border-light);
 }
 
-.past-event-section {
-  background: rgba(248, 250, 252, 0.6);
-  border-color: var(--border-light);
-  padding: clamp(0.5rem, 1.2vw, 0.625rem);
-}
-
-.past-event-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: clamp(0.4rem, 1vw, 0.5rem);
-  max-height: 140px;
-  overflow-y: auto;
-  padding-right: clamp(0.25rem, 0.6vw, 0.375rem);
-}
-
-.past-event-item {
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.9);
-  padding: clamp(0.35rem, 1vw, 0.45rem) clamp(0.5rem, 1.2vw, 0.65rem);
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: none;
-}
-
-.past-event-item:hover {
-  border-color: rgba(0, 0, 0, 0.3);
-  box-shadow: var(--shadow-sm);
-}
-
-.past-event-item.is-selected {
-  border-color: var(--text-primary);
-  box-shadow: var(--shadow-md);
-}
-
-.past-event-empty {
-  font-size: 0.85rem;
-  color: var(--text-light);
-  padding: clamp(0.35rem, 1vw, 0.45rem) 0;
-}
-
 .form-group {
   margin-bottom: clamp(0.625rem, 1.5vw, 0.75rem);
   position: relative;
@@ -1659,10 +1610,6 @@ body.modal-open {
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
   font-weight: 500;
-}
-
-.modal .form-group select {
-  transition: none !important;
 }
 
 /* Remove transitions from reminder and recurrence selects */
@@ -2022,14 +1969,6 @@ body.modal-open {
   display: none;
 }
 
-.color-choice {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 60px;
-}
-
 .color-option {
   width: 32px;
   height: 32px;
@@ -2045,14 +1984,6 @@ body.modal-open {
 .options-section .color-option {
   width: 28px;
   height: 28px;
-}
-
-.color-label {
-  font-size: 0.75rem;
-  color: var(--text-light);
-  text-align: center;
-  line-height: 1.1;
-  white-space: nowrap;
 }
 
 .color-option::after {

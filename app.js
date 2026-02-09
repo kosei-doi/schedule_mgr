@@ -41,14 +41,6 @@ const eventListeners = {
 let events = [];
 let shifts = []; // Shift data from pt app (managed separately from events)
 let workplaces = []; // Workplace data from pt app
-let mealWeeklyPlan = {}; // Weekly meal plan data from diet app (read-only)
-let mealInventory = {}; // Inventory data from diet app (read-only)
-let mealEvents = []; // Derived meal events for schedule display
-let combiSemesters = [];
-let combiCurrentSemesterId = null;
-let combiTimetableEvents = [];
-let combiTaskEvents = [];
-let combiTasks = {};
 let currentDate = new Date();
 let currentView = 'day'; // 'day', 'week', or 'month'
 let editingEventId = null;
@@ -72,21 +64,6 @@ const VISIBLE_END_HOUR = 23;
 const HOUR_HEIGHT_PX = 25; // Fallback value (actual value is obtained dynamically)
 const MIN_EVENT_HEIGHT_PX = 15;
 const VISIBLE_HOURS = VISIBLE_END_HOUR - VISIBLE_START_HOUR + 1;
-let monthViewRangeStart = null;
-let monthViewRangeEnd = null;
-const COMBI_PERIOD_TIMES = [
-  { start: '08:50', end: '10:30' },
-  { start: '10:40', end: '12:20' },
-  { start: '13:10', end: '14:50' },
-  { start: '15:00', end: '16:40' },
-  { start: '16:50', end: '18:30' },
-];
-const MEAL_TIME_SLOTS = {
-  breakfast: { label: 'Breakfast', start: '08:00', durationMinutes: 45 },
-  lunch: { label: 'Lunch', start: '12:30', durationMinutes: 45 },
-  dinner: { label: 'Dinner', start: '19:00', durationMinutes: 45 },
-};
-const MEAL_EVENT_COLOR = '#dbeafe';
 
 // Get actual height of time slot (1 hour)
 function getHourHeight() {
@@ -544,10 +521,24 @@ function updateViewsForEvent(event) {
   }
   // Month view: Check if event is included in the month
   else if (currentView === 'month') {
-    const range = monthViewRangeStart && monthViewRangeEnd
-      ? { start: monthViewRangeStart, end: monthViewRangeEnd }
-      : getMonthViewVisibleRange(currentDate);
-    if (eventStartDate <= range.end && eventEndDate >= range.start) {
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    
+    // Get event start and end months
+    const eventStartMonth = eventStartDate.getMonth();
+    const eventStartYear = eventStartDate.getFullYear();
+    const eventEndMonth = eventEndDate.getMonth();
+    const eventEndYear = eventEndDate.getFullYear();
+    
+    // Check if event overlaps with current month
+    const eventStartsInMonth = eventStartYear === currentYear && eventStartMonth === currentMonth;
+    const eventEndsInMonth = eventEndYear === currentYear && eventEndMonth === currentMonth;
+    const eventSpansMonth = (
+      (eventStartYear < currentYear || (eventStartYear === currentYear && eventStartMonth < currentMonth)) &&
+      (eventEndYear > currentYear || (eventEndYear === currentYear && eventEndMonth > currentMonth))
+    );
+    
+    if (eventStartsInMonth || eventEndsInMonth || eventSpansMonth) {
       renderMonthView();
     }
   }
@@ -592,6 +583,7 @@ function normalizeShiftFromSnapshot(snapshot, key) {
   if (typeof payload !== 'object') {
     return null;
   }
+  
   // Shift data format: {date, start, end, workplaceId, workplaceName, role, notes, rate}
   if (payload.date && payload.start && payload.end) {
     const startTime = `${payload.date}T${payload.start}`;
@@ -622,67 +614,6 @@ function normalizeShiftFromSnapshot(snapshot, key) {
   }
   
   return null;
-}
-
-function buildMealEventId(dateStr, mealKey) {
-  if (!dateStr || !mealKey) return '';
-  return `meal_${dateStr}_${mealKey}`;
-}
-
-function buildMealEvent(dateStr, mealKey, itemId) {
-  if (!dateStr || !mealKey || !itemId) return null;
-  const slot = MEAL_TIME_SLOTS[mealKey] || { label: mealKey, start: '12:00', durationMinutes: 30 };
-  const startBase = new Date(`${dateStr}T${slot.start}`);
-  if (Number.isNaN(startBase.getTime())) return null;
-  const endBase = new Date(startBase.getTime() + (slot.durationMinutes || 30) * 60000);
-  const mealItem = mealInventory && typeof mealInventory === 'object' ? mealInventory[itemId] : null;
-  const itemName = mealItem?.name || 'Meal';
-  return {
-    id: buildMealEventId(dateStr, mealKey),
-    title: itemName,
-    description: 'Meal plan (read-only)',
-    startTime: formatDateTimeLocal(startBase),
-    endTime: formatDateTimeLocal(endBase),
-    color: MEAL_EVENT_COLOR,
-    allDay: false,
-    isMeal: true,
-    source: 'diet_mgr',
-  };
-}
-
-function rebuildMealEvents() {
-  const allowedRanges = getAllowedDateRanges();
-  const nextEvents = [];
-  if (mealWeeklyPlan && typeof mealWeeklyPlan === 'object') {
-    const mealIndexMap = {
-      0: 'breakfast',
-      1: 'lunch',
-      2: 'dinner',
-    };
-    Object.entries(mealWeeklyPlan).forEach(([key, itemId]) => {
-      if (!key || !itemId) return;
-      const lastDash = key.lastIndexOf('-');
-      if (lastDash <= 0) return;
-      const dateStr = key.slice(0, lastDash);
-      const mealIndex = Number(key.slice(lastDash + 1));
-      if (!dateStr || Number.isNaN(mealIndex)) return;
-      const mealKey = mealIndexMap[mealIndex];
-      if (!mealKey) return;
-      const event = buildMealEvent(dateStr, mealKey, itemId);
-      if (!event) return;
-      if (!isEventInAllowedRange(event, allowedRanges)) return;
-      nextEvents.push(event);
-    });
-  }
-  nextEvents.sort((a, b) => {
-    const aTime = a.startTime ? new Date(a.startTime).getTime() : Infinity;
-    const bTime = b.startTime ? new Date(b.startTime).getTime() : Infinity;
-    if (Number.isNaN(aTime)) return 1;
-    if (Number.isNaN(bTime)) return -1;
-    return aTime - bTime;
-  });
-  mealEvents = nextEvents;
-  updateViews();
 }
 
 // Load events function (incremental update version)
@@ -917,20 +848,6 @@ let unsubscribeShiftAdded = null;
 let unsubscribeShiftChanged = null;
 let unsubscribeShiftRemoved = null;
 
-// Load meal plans from diet app
-let unsubscribeMeals = null;
-let unsubscribeMealAdded = null;
-let unsubscribeMealChanged = null;
-let unsubscribeMealRemoved = null;
-let unsubscribeMealInventory = null;
-let unsubscribeMealInventoryAdded = null;
-let unsubscribeMealInventoryChanged = null;
-let unsubscribeMealInventoryRemoved = null;
-
-let unsubscribeCombiSemesters = null;
-let unsubscribeCombiCurrentSemester = null;
-let unsubscribeCombiTasks = null;
-
 async function loadShifts() {
   if (!isFirebaseEnabled || !window.firebase?.db) {
     return;
@@ -1082,345 +999,6 @@ async function loadShifts() {
       unsubscribeShiftRemoved = null;
     }
   };
-}
-
-async function loadMealSchedules() {
-  if (!isFirebaseEnabled || !window.firebase?.db) {
-    return;
-  }
-
-  // Unsubscribe existing listeners
-  if (typeof unsubscribeMeals === 'function') {
-    unsubscribeMeals();
-    unsubscribeMeals = null;
-  }
-  if (typeof unsubscribeMealAdded === 'function') {
-    unsubscribeMealAdded();
-    unsubscribeMealAdded = null;
-  }
-  if (typeof unsubscribeMealChanged === 'function') {
-    unsubscribeMealChanged();
-    unsubscribeMealChanged = null;
-  }
-  if (typeof unsubscribeMealRemoved === 'function') {
-    unsubscribeMealRemoved();
-    unsubscribeMealRemoved = null;
-  }
-  if (typeof unsubscribeMealInventory === 'function') {
-    unsubscribeMealInventory();
-    unsubscribeMealInventory = null;
-  }
-  if (typeof unsubscribeMealInventoryAdded === 'function') {
-    unsubscribeMealInventoryAdded();
-    unsubscribeMealInventoryAdded = null;
-  }
-  if (typeof unsubscribeMealInventoryChanged === 'function') {
-    unsubscribeMealInventoryChanged();
-    unsubscribeMealInventoryChanged = null;
-  }
-  if (typeof unsubscribeMealInventoryRemoved === 'function') {
-    unsubscribeMealInventoryRemoved();
-    unsubscribeMealInventoryRemoved = null;
-  }
-
-  const weeklyPlanRef = window.firebase.ref(window.firebase.db, "weeklyPlan");
-  const inventoryRef = window.firebase.ref(window.firebase.db, "inventory");
-
-  // Initial load
-  try {
-    const [weeklySnapshot, inventorySnapshot] = await Promise.all([
-      window.firebase.get(weeklyPlanRef),
-      window.firebase.get(inventoryRef),
-    ]);
-    const weeklyData = weeklySnapshot.val();
-    const inventoryData = inventorySnapshot.val();
-    mealWeeklyPlan = (weeklyData && typeof weeklyData === 'object' && !Array.isArray(weeklyData)) ? weeklyData : {};
-    mealInventory = (inventoryData && typeof inventoryData === 'object' && !Array.isArray(inventoryData)) ? inventoryData : {};
-    rebuildMealEvents();
-  } catch (error) {
-    console.error('Failed to load meal schedules:', error);
-    return;
-  }
-
-  // Meal plan updates
-  unsubscribeMealAdded = window.firebase.onChildAdded(weeklyPlanRef, (snapshot) => {
-    try {
-      const key = snapshot.key;
-      if (!key) return;
-      const payload = snapshot.val() || {};
-      if (!mealWeeklyPlan || typeof mealWeeklyPlan !== 'object') mealWeeklyPlan = {};
-      if (mealWeeklyPlan[key] === undefined) {
-        mealWeeklyPlan[key] = payload;
-        rebuildMealEvents();
-      }
-    } catch (error) {
-      console.error('Failed to add meal schedule:', error);
-    }
-  });
-
-  unsubscribeMealChanged = window.firebase.onChildChanged(weeklyPlanRef, (snapshot) => {
-    try {
-      const key = snapshot.key;
-      if (!key) return;
-      const payload = snapshot.val() || {};
-      if (!mealWeeklyPlan || typeof mealWeeklyPlan !== 'object') mealWeeklyPlan = {};
-      mealWeeklyPlan[key] = payload;
-      rebuildMealEvents();
-    } catch (error) {
-      console.error('Failed to update meal schedule:', error);
-    }
-  });
-
-  unsubscribeMealRemoved = window.firebase.onChildRemoved(weeklyPlanRef, (snapshot) => {
-    try {
-      const key = snapshot.key;
-      if (!key) return;
-      if (mealWeeklyPlan && typeof mealWeeklyPlan === 'object' && mealWeeklyPlan[key] !== undefined) {
-        delete mealWeeklyPlan[key];
-        rebuildMealEvents();
-      }
-    } catch (error) {
-      console.error('Failed to remove meal schedule:', error);
-    }
-  });
-
-  unsubscribeMeals = () => {
-    if (typeof unsubscribeMealAdded === 'function') {
-      unsubscribeMealAdded();
-      unsubscribeMealAdded = null;
-    }
-    if (typeof unsubscribeMealChanged === 'function') {
-      unsubscribeMealChanged();
-      unsubscribeMealChanged = null;
-    }
-    if (typeof unsubscribeMealRemoved === 'function') {
-      unsubscribeMealRemoved();
-      unsubscribeMealRemoved = null;
-    }
-  };
-
-  // Inventory updates for meal names
-  unsubscribeMealInventoryAdded = window.firebase.onChildAdded(inventoryRef, (snapshot) => {
-    try {
-      const key = snapshot.key;
-      if (!key) return;
-      const payload = snapshot.val() || {};
-      if (typeof payload !== 'object') return;
-      if (!mealInventory || typeof mealInventory !== 'object') mealInventory = {};
-      if (!mealInventory[key]) {
-        mealInventory[key] = payload;
-        rebuildMealEvents();
-      }
-    } catch (error) {
-      console.error('Failed to add meal inventory item:', error);
-    }
-  });
-
-  unsubscribeMealInventoryChanged = window.firebase.onChildChanged(inventoryRef, (snapshot) => {
-    try {
-      const key = snapshot.key;
-      if (!key) return;
-      const payload = snapshot.val() || {};
-      if (typeof payload !== 'object') return;
-      if (!mealInventory || typeof mealInventory !== 'object') mealInventory = {};
-      mealInventory[key] = payload;
-      rebuildMealEvents();
-    } catch (error) {
-      console.error('Failed to update meal inventory item:', error);
-    }
-  });
-
-  unsubscribeMealInventoryRemoved = window.firebase.onChildRemoved(inventoryRef, (snapshot) => {
-    try {
-      const key = snapshot.key;
-      if (!key) return;
-      if (mealInventory && typeof mealInventory === 'object' && mealInventory[key]) {
-        delete mealInventory[key];
-        rebuildMealEvents();
-      }
-    } catch (error) {
-      console.error('Failed to remove meal inventory item:', error);
-    }
-  });
-
-  unsubscribeMealInventory = () => {
-    if (typeof unsubscribeMealInventoryAdded === 'function') {
-      unsubscribeMealInventoryAdded();
-      unsubscribeMealInventoryAdded = null;
-    }
-    if (typeof unsubscribeMealInventoryChanged === 'function') {
-      unsubscribeMealInventoryChanged();
-      unsubscribeMealInventoryChanged = null;
-    }
-    if (typeof unsubscribeMealInventoryRemoved === 'function') {
-      unsubscribeMealInventoryRemoved();
-      unsubscribeMealInventoryRemoved = null;
-    }
-  };
-}
-
-function getCombiActiveSemester() {
-  if (!Array.isArray(combiSemesters) || combiSemesters.length === 0) {
-    return null;
-  }
-  if (combiCurrentSemesterId) {
-    return combiSemesters.find(s => s && s.id === combiCurrentSemesterId) || null;
-  }
-  return combiSemesters[0] || null;
-}
-
-function buildCombiTimetableEvents() {
-  const semester = getCombiActiveSemester();
-  if (!semester) {
-    combiTimetableEvents = [];
-    return;
-  }
-
-  const classDays = Array.isArray(semester.classDays) ? semester.classDays : [];
-  const timetable = Array.isArray(semester.timetable) ? semester.timetable : [];
-  const events = [];
-
-  classDays.forEach((dateStr) => {
-    if (!dateStr || typeof dateStr !== 'string') return;
-    const dateObj = new Date(dateStr);
-    if (Number.isNaN(dateObj.getTime())) return;
-    const dayIndex = (dateObj.getDay() + 6) % 7; // Mon=0 ... Sun=6
-    if (dayIndex < 0 || dayIndex > 4) return;
-
-    for (let periodIndex = 0; periodIndex < 5; periodIndex += 1) {
-      const row = Array.isArray(timetable[periodIndex]) ? timetable[periodIndex] : [];
-      const subject = typeof row[dayIndex] === 'string' ? row[dayIndex].trim() : '';
-      if (!subject) continue;
-      const periodTime = COMBI_PERIOD_TIMES[periodIndex];
-      if (!periodTime || !periodTime.start || !periodTime.end) continue;
-
-      events.push({
-        id: `combi_timetable_${semester.id}_${dateStr}_${periodIndex}_${dayIndex}`,
-        title: subject,
-        description: '',
-        startTime: `${dateStr}T${periodTime.start}`,
-        endTime: `${dateStr}T${periodTime.end}`,
-        allDay: false,
-        isTimetable: true,
-        color: '#3b82f6',
-        source: 'combi',
-      });
-    }
-  });
-
-  combiTimetableEvents = events;
-}
-
-function buildCombiTaskEvents() {
-  const activeSemesterId = combiCurrentSemesterId;
-  const tasks = combiTasks && typeof combiTasks === 'object' ? combiTasks : {};
-  const events = [];
-
-  Object.entries(tasks).forEach(([taskId, task]) => {
-    if (!task || typeof task !== 'object') return;
-    if (task.completed === true) return;
-    if (activeSemesterId) {
-      if (!task.semesterId || task.semesterId !== activeSemesterId) return;
-    }
-    const dueDateValue = task.dueDate;
-    if (!dueDateValue || typeof dueDateValue !== 'string') return;
-    const datePart = dueDateValue.split('T')[0];
-    const dateObj = new Date(datePart);
-    if (Number.isNaN(dateObj.getTime())) return;
-
-    const taskTypeLabel = task.taskType || 'Task';
-    const taskTitle = task.title || 'Task';
-    const displayTitle = `${taskTypeLabel}: ${taskTitle}`;
-
-    events.push({
-      id: `combi_task_${taskId}`,
-      title: displayTitle,
-      description: task.content || '',
-      startTime: `${datePart}T00:00`,
-      endTime: `${datePart}T23:59`,
-      allDay: true,
-      isTask: true,
-      color: '#0ea5e9',
-      source: 'combi',
-    });
-  });
-
-  combiTaskEvents = events;
-}
-
-function rebuildCombiDerivedEvents() {
-  buildCombiTimetableEvents();
-  buildCombiTaskEvents();
-  updateViews();
-}
-
-function loadCombiSemesters() {
-  if (!isFirebaseEnabled || !window.firebase?.db) {
-    combiSemesters = [];
-    rebuildCombiDerivedEvents();
-    return;
-  }
-
-  if (typeof unsubscribeCombiSemesters === 'function') {
-    unsubscribeCombiSemesters();
-    unsubscribeCombiSemesters = null;
-  }
-
-  const semestersRef = window.firebase.ref(window.firebase.db, 'semesters');
-  unsubscribeCombiSemesters = window.firebase.onValue(semestersRef, (snapshot) => {
-    const data = snapshot.val();
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
-      combiSemesters = Object.values(data);
-    } else {
-      combiSemesters = [];
-    }
-    rebuildCombiDerivedEvents();
-  });
-}
-
-function loadCombiCurrentSemesterId() {
-  if (!isFirebaseEnabled || !window.firebase?.db) {
-    combiCurrentSemesterId = null;
-    rebuildCombiDerivedEvents();
-    return;
-  }
-
-  if (typeof unsubscribeCombiCurrentSemester === 'function') {
-    unsubscribeCombiCurrentSemester();
-    unsubscribeCombiCurrentSemester = null;
-  }
-
-  const currentRef = window.firebase.ref(window.firebase.db, 'tabler/currentSemesterId');
-  unsubscribeCombiCurrentSemester = window.firebase.onValue(currentRef, (snapshot) => {
-    const data = snapshot.val();
-    combiCurrentSemesterId = typeof data === 'string' ? data : null;
-    rebuildCombiDerivedEvents();
-  });
-}
-
-function loadCombiTasks() {
-  if (!isFirebaseEnabled || !window.firebase?.db) {
-    combiTasks = {};
-    rebuildCombiDerivedEvents();
-    return;
-  }
-
-  if (typeof unsubscribeCombiTasks === 'function') {
-    unsubscribeCombiTasks();
-    unsubscribeCombiTasks = null;
-  }
-
-  const tasksRef = window.firebase.ref(window.firebase.db, 'tabler/tasks');
-  unsubscribeCombiTasks = window.firebase.onValue(tasksRef, (snapshot) => {
-    const data = snapshot.val();
-    if (data && typeof data === 'object' && !Array.isArray(data)) {
-      combiTasks = data;
-    } else {
-      combiTasks = {};
-    }
-    buildCombiTaskEvents();
-    updateViews();
-  });
 }
 
 // Load workplaces from pt app
@@ -1592,7 +1170,6 @@ function buildSyncEventPayload(event) {
         ? event.reminderMinutes
         : null,
     color: event.color || null,
-    googleEventId: event.googleEventId || null,
   };
 }
 
@@ -3017,60 +2594,7 @@ function getEventsByDate(date) {
       }
     });
   }
-
-  if (Array.isArray(mealEvents)) {
-    mealEvents.forEach(meal => {
-      if (!meal || !meal.id) return;
-      if (!meal.startTime) return;
-
-      const mealStart = new Date(meal.startTime);
-      const mealEnd = meal.endTime ? new Date(meal.endTime) : mealStart;
-      if (Number.isNaN(mealStart.getTime()) || Number.isNaN(mealEnd.getTime())) return;
-      if (mealStart <= targetDateEnd && mealEnd >= targetDate) {
-        list.push(meal);
-      }
-    });
-  }
-
-  if (Array.isArray(combiTimetableEvents)) {
-    combiTimetableEvents.forEach(ev => {
-      if (!ev || !ev.id) return;
-      if (!ev.startTime) return;
-
-      const eventStart = new Date(ev.startTime);
-      const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
-      if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
-
-      if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
-        list.push(ev);
-      }
-    });
-  }
-
-  if (Array.isArray(combiTaskEvents)) {
-    combiTaskEvents.forEach(ev => {
-      if (!ev || !ev.id) return;
-      if (!ev.startTime) return;
-
-      if (isAllDayEvent(ev)) {
-        const eventStartDate = ev.startTime.split('T')[0];
-        const eventEndDate = ev.endTime && typeof ev.endTime === 'string' ? ev.endTime.split('T')[0] : eventStartDate;
-        if (dateStr >= eventStartDate && dateStr <= eventEndDate) {
-          list.push(ev);
-        }
-        return;
-      }
-
-      const eventStart = new Date(ev.startTime);
-      const eventEnd = ev.endTime ? new Date(ev.endTime) : new Date(eventStart);
-      if (Number.isNaN(eventStart.getTime()) || Number.isNaN(eventEnd.getTime())) return;
-
-      if (eventStart <= targetDateEnd && eventEnd >= targetDate) {
-        list.push(ev);
-      }
-    });
-  }
-
+  
   return list;
 }
 
@@ -3128,8 +2652,6 @@ function renderDayView() {
 
   const dayEvents = getEventsByDate(currentDate);
   const { allDayEvents, timedEvents } = splitEventsByAllDay(dayEvents);
-  const shiftEvents = timedEvents.filter(event => event?.isShift === true);
-  const mealEventsForDay = timedEvents.filter(event => event?.isMeal === true);
 
   if (allDayContainer) {
     const sortedAllDay = [...allDayEvents].sort((a, b) => {
@@ -3154,6 +2676,7 @@ function renderDayView() {
   sortedTimed.forEach((event, index) => {
     groupMap.set(event.id, groups[index]);
   });
+
   syncEventElements(container, sortedTimed, viewCaches.day.timed, {
     positionEvent: (element, event) => {
       positionEventInDayView(element, event, currentDate);
@@ -3205,8 +2728,6 @@ function renderWeekView() {
     
     const dayEvents = getEventsByDate(dayDate);
     const { allDayEvents, timedEvents } = splitEventsByAllDay(dayEvents);
-    const shiftEvents = timedEvents.filter(event => event?.isShift === true);
-    const mealEventsForDay = timedEvents.filter(event => event?.isMeal === true);
     
     if (allDayColumn) {
       const sortedAllDay = [...allDayEvents].sort((a, b) => {
@@ -3231,6 +2752,7 @@ function renderWeekView() {
     sortedTimed.forEach((event, index) => {
       groupMap.set(event.id, groups[index]);
     });
+    
     syncEventElements(eventsContainer, sortedTimed, viewCaches.week.timed[i], {
       positionEvent: (element, event) => {
         positionEventInDayView(element, event, dayDate);
@@ -3296,14 +2818,11 @@ function populateEventElement(element, event, options = {}) {
   const { variant } = options;
   const isAllDay = variant === 'all-day' || isAllDayEvent(event);
   const isShift = event.isShift === true || (event.id && typeof event.id === 'string' && event.id.startsWith('shift_'));
-  const isMeal = event.isMeal === true || (event.id && typeof event.id === 'string' && event.id.startsWith('meal_'));
-  const isReadOnly = isShift || isMeal;
   
   element.className = 'event-item';
   if (isAllDay) element.classList.add('all-day');
   if (event.isTimetable === true) element.classList.add('timetable-event');
-  if (isReadOnly) element.classList.add('readonly-event'); // Add readonly class for read-only items
-  if (isMeal) element.classList.add('meal-event');
+  if (isShift) element.classList.add('readonly-event'); // Add readonly class for shifts
   element.style.backgroundColor = event.color || '#3b82f6';
   element.dataset.eventId = event.id;
   if (event.isTimetable === true) {
@@ -3315,11 +2834,6 @@ function populateEventElement(element, event, options = {}) {
     element.dataset.isShift = 'true';
   } else {
     delete element.dataset.isShift;
-  }
-  if (isMeal) {
-    element.dataset.isMeal = 'true';
-  } else {
-    delete element.dataset.isMeal;
   }
   if (isAllDay) {
     element.dataset.allDay = 'true';
@@ -3333,16 +2847,16 @@ function populateEventElement(element, event, options = {}) {
   const displayTitle = truncateText(fullTitle, 30);
 
   if (isAllDay) {
-    element.setAttribute('aria-label', `${fullTitle} (All day)${isReadOnly ? ' (Read-only)' : ''}`);
+    element.setAttribute('aria-label', `${fullTitle} (All day)${isShift ? ' (Read-only)' : ''}`);
     element.innerHTML = `
       <div class="event-title">${escapeHtml(displayTitle)}</div>
     `;
   } else {
     const startLabel = event.startTime ? formatTime(event.startTime) : '--:--';
     const endLabel = event.endTime ? formatTime(event.endTime) : '--:--';
-    element.setAttribute('aria-label', `${fullTitle}, ${startLabel} to ${endLabel}${isReadOnly ? ' (Read-only)' : ''}`);
-    // Hide resize handles for read-only items
-    const resizeHandlesHtml = isReadOnly ? '' : `
+    element.setAttribute('aria-label', `${fullTitle}, ${startLabel} to ${endLabel}${isShift ? ' (Read-only)' : ''}`);
+    // Hide resize handles for shifts (read-only)
+    const resizeHandlesHtml = isShift ? '' : `
       <div class="resize-handle top"></div>
       <div class="resize-handle bottom"></div>
     `;
@@ -3392,126 +2906,6 @@ function applyOverlapStyles(element, groupInfo) {
   const leftPercent = widthPercent * groupInfo.indexInGroup;
   element.style.left = `${leftPercent}%`;
   element.style.right = `${100 - (leftPercent + widthPercent)}%`;
-}
-
-function getMonthViewVisibleRange(baseDate) {
-  const safeBase = baseDate instanceof Date && !Number.isNaN(baseDate.getTime())
-    ? baseDate
-    : new Date();
-  const year = safeBase.getFullYear();
-  const month = safeBase.getMonth();
-  const firstDay = new Date(year, month, 1);
-  const startDate = new Date(firstDay);
-  startDate.setDate(startDate.getDate() - firstDay.getDay());
-  startDate.setHours(0, 0, 0, 0);
-  const endDate = new Date(startDate);
-  endDate.setDate(startDate.getDate() + (6 * 7) - 1);
-  endDate.setHours(23, 59, 59, 999);
-  return { start: startDate, end: endDate };
-}
-
-function getEventTemplates(limit = 40) {
-  if (!Array.isArray(events)) return [];
-  const uniqueMap = new Map();
-
-  events.forEach((event) => {
-    if (!event || !event.id || !event.startTime) return;
-    if (event.isTimetable === true) return;
-    if (event.isShift === true) return;
-    if (typeof event.id === 'string' && event.id.startsWith('shift_')) return;
-    if (typeof event.id === 'string' && event.id.startsWith('temp-')) return;
-
-    const eventStart = new Date(event.startTime);
-    if (Number.isNaN(eventStart.getTime())) return;
-
-    const title = event.title || '';
-    const key = title;
-    const existing = uniqueMap.get(key);
-    if (!existing) {
-      uniqueMap.set(key, event);
-      return;
-    }
-    const existingTime = new Date(existing.startTime).getTime();
-    const nextTime = new Date(event.startTime).getTime();
-    if (!Number.isNaN(nextTime) && (Number.isNaN(existingTime) || nextTime > existingTime)) {
-      uniqueMap.set(key, event);
-    }
-  });
-
-  return Array.from(uniqueMap.values())
-    .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
-    .slice(0, limit);
-}
-
-function populatePastEventList() {
-  const list = safeGetElementById('pastEventList');
-  if (!list) return;
-
-  list.innerHTML = '';
-  const candidates = getEventTemplates();
-
-  if (candidates.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'past-event-empty';
-    empty.textContent = 'No events available yet.';
-    list.appendChild(empty);
-    return;
-  }
-
-  candidates.forEach((event) => {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'past-event-item';
-    item.dataset.title = event.title || '';
-    item.dataset.color = event.color || '#3b82f6';
-    item.setAttribute('role', 'option');
-    const titleLabel = event.title || '(No title)';
-    item.textContent = titleLabel;
-    list.appendChild(item);
-  });
-}
-
-function bindPastEventList() {
-  const list = safeGetElementById('pastEventList');
-  if (!list || list.dataset.bound === 'true') return;
-  list.dataset.bound = 'true';
-
-  list.addEventListener('click', (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    if (!target.classList.contains('past-event-item')) return;
-
-    list.querySelectorAll('.past-event-item.is-selected').forEach((el) => {
-      el.classList.remove('is-selected');
-    });
-    target.classList.add('is-selected');
-
-    const titleInput = safeGetElementById('eventTitle');
-    if (titleInput) {
-      titleInput.value = target.dataset.title || '';
-    }
-
-    const colorValue = target.dataset.color || '#3b82f6';
-    setColorSelection(colorValue);
-  });
-}
-
-function setColorSelection(colorValue) {
-  const radios = document.querySelectorAll('input[name="color"]');
-  if (!radios || radios.length === 0) return;
-  let matched = false;
-  radios.forEach((radio) => {
-    if (radio.value === colorValue) {
-      radio.checked = true;
-      matched = true;
-    } else {
-      radio.checked = false;
-    }
-  });
-  if (!matched) {
-    const fallback = Array.from(radios).find((radio) => radio.value === '#3b82f6') || radios[0];
-    if (fallback) fallback.checked = true;
-  }
 }
 
 function syncEventElements(container, events, cacheMap, { variant, positionEvent, positionContext } = {}) {
@@ -3600,7 +2994,7 @@ function positionEventInDayView(element, event, targetDate = null) {
   // For events that span days, only display the portion within current day range
   const displayStart = startTime < currentDay ? currentDay : startTime;
   const displayEnd = endTime > currentDayEnd ? currentDayEnd : endTime;
-
+  
   // Don't display anything if display range doesn't overlap with current day
   if (displayStart >= currentDayEnd || displayEnd <= currentDay) {
     element.style.display = 'none';
@@ -3710,10 +3104,6 @@ function showEventModal(eventId = null) {
     showMessage('Please edit shifts in the Part-Time Tracker app.', 'info', 3000);
     return;
   }
-  if (eventId && typeof eventId === 'string' && eventId.startsWith('meal_')) {
-    showMessage('Please edit meals in the Meal Planner app.', 'info', 3000);
-    return;
-  }
   
   const modal = safeGetElementById('eventModal');
   const modalTitle = safeGetElementById('modalTitle');
@@ -3730,8 +3120,6 @@ function showEventModal(eventId = null) {
   const allDayRow = safeGetElementById('allDayDateRow');
   const allDayStartInput = safeGetElementById('eventAllDayStart');
   const allDayEndInput = safeGetElementById('eventAllDayEnd');
-  const pastEventSection = safeGetElementById('pastEventSection');
-  const pastEventList = safeGetElementById('pastEventList');
   
   // Check required elements
   if (!modal || !modalTitle || !form || !startDateInput || !startHourInput || !startMinuteInput || 
@@ -3811,9 +3199,6 @@ function showEventModal(eventId = null) {
       }
     }
     
-    if (pastEventSection) pastEventSection.classList.add('hidden');
-    if (pastEventList) pastEventList.innerHTML = '';
-
     // Set form values
     const titleInput = safeGetElementById('eventTitle');
     if (titleInput) titleInput.value = event.title || '';
@@ -3835,7 +3220,8 @@ function showEventModal(eventId = null) {
     }
     
     // Set color
-    setColorSelection(event.color || '#3b82f6');
+    const colorRadio = document.querySelector(`input[name="color"][value="${event.color}"]`);
+    if (colorRadio) colorRadio.checked = true;
     
     // Set recurrence
     const recurrenceSelect = safeGetElementById('eventRecurrence');
@@ -3877,11 +3263,8 @@ function showEventModal(eventId = null) {
     if (descInput) descInput.value = '';
     
     // Reset color to default (blue)
-    setColorSelection('#3b82f6');
-
-    if (pastEventSection) pastEventSection.classList.remove('hidden');
-    populatePastEventList();
-    bindPastEventList();
+    const defaultColorRadio = document.querySelector('input[name="color"][value="#3b82f6"]');
+    if (defaultColorRadio) defaultColorRadio.checked = true;
     
       // Keep existing values for temporary events
       if (eventId && typeof eventId === 'string' && eventId.startsWith('temp-')) {
@@ -3906,7 +3289,8 @@ function showEventModal(eventId = null) {
           }
           
           // Set color
-          setColorSelection(event.color || '#3b82f6');
+          const colorRadio = document.querySelector(`input[name="color"][value="${event.color}"]`);
+          if (colorRadio) colorRadio.checked = true;
         }
       } else {
         // Set default datetime values (current date/time, rounded to nearest 15 minutes)
@@ -4034,10 +3418,14 @@ function renderMonthView() {
   
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
-
-  const { start: startDate, end: endDate } = getMonthViewVisibleRange(currentDate);
-  monthViewRangeStart = startDate;
-  monthViewRangeEnd = endDate;
+  
+  // First and last day of month
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  
+  // Start date of first week of month (Sunday)
+  const startDate = new Date(firstDay);
+  startDate.setDate(startDate.getDate() - firstDay.getDay());
   
   // Generate dates for 6 weeks
   for (let week = 0; week < 6; week++) {
@@ -4080,7 +3468,7 @@ function createMonthDayElement(date, currentMonth) {
   
   // Events for that day (timetable events are hidden in month view)
   const dayEvents = getEventsByDate(date);
-  const visibleEvents = dayEvents.filter(event => event.isTimetable !== true && event.isMeal !== true);
+  const visibleEvents = dayEvents.filter(event => event.isTimetable !== true);
 
   if (visibleEvents.length > 0) {
     const eventsContainer = document.createElement('div');
@@ -4492,9 +3880,6 @@ function isAllDayEvent(event) {
 function splitEventsByAllDay(eventList = []) {
   const allDayEvents = [];
   const timedEvents = [];
-  const invalidEvents = [];
-  let readOnlyAllDayCount = 0;
-  let readOnlyTimedCount = 0;
   eventList.forEach((event) => {
     const lacksTime =
       !event?.startTime ||
@@ -4503,17 +3888,8 @@ function splitEventsByAllDay(eventList = []) {
       Number.isNaN(new Date(event.endTime).getTime());
     if (isAllDayEvent(event) || lacksTime) {
       allDayEvents.push(event);
-      if (event?.isShift === true || event?.isMeal === true) {
-        readOnlyAllDayCount += 1;
-      }
-      if (lacksTime) {
-        invalidEvents.push(event);
-      }
     } else {
       timedEvents.push(event);
-      if (event?.isShift === true || event?.isMeal === true) {
-        readOnlyTimedCount += 1;
-      }
     }
   });
   return { allDayEvents, timedEvents };
@@ -5127,14 +4503,6 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Load shifts from pt app
   loadShifts();
-
-  // Load meal schedules from diet app
-  loadMealSchedules();
-
-  // Load timetable/tasks from combi app
-  loadCombiSemesters();
-  loadCombiCurrentSemesterId();
-  loadCombiTasks();
   
   // Register event listeners
   setupEventListeners();
@@ -5153,26 +4521,6 @@ window.addEventListener('beforeunload', () => {
   if (typeof unsubscribeEvents === 'function') {
     unsubscribeEvents();
     unsubscribeEvents = null;
-  }
-  if (typeof unsubscribeCombiSemesters === 'function') {
-    unsubscribeCombiSemesters();
-    unsubscribeCombiSemesters = null;
-  }
-  if (typeof unsubscribeCombiCurrentSemester === 'function') {
-    unsubscribeCombiCurrentSemester();
-    unsubscribeCombiCurrentSemester = null;
-  }
-  if (typeof unsubscribeCombiTasks === 'function') {
-    unsubscribeCombiTasks();
-    unsubscribeCombiTasks = null;
-  }
-  if (typeof unsubscribeMeals === 'function') {
-    unsubscribeMeals();
-    unsubscribeMeals = null;
-  }
-  if (typeof unsubscribeMealInventory === 'function') {
-    unsubscribeMealInventory();
-    unsubscribeMealInventory = null;
   }
   // Cleanup all event listeners
   eventListeners.removeAll();
@@ -6327,11 +5675,9 @@ function attachResizeHandlers() {
     const id = item.dataset.eventId;
     
     // Check if this is a shift (read-only)
-    const isReadOnly = item.dataset.isShift === 'true'
-      || item.dataset.isMeal === 'true'
-      || (id && typeof id === 'string' && (id.startsWith('shift_') || id.startsWith('meal_')));
-    if (isReadOnly) {
-      // Read-only items, skip resize handlers
+    const isShift = item.dataset.isShift === 'true' || (id && typeof id === 'string' && id.startsWith('shift_'));
+    if (isShift) {
+      // Shifts are read-only, skip resize handlers
       const topHandle = item.querySelector('.resize-handle.top');
       const bottomHandle = item.querySelector('.resize-handle.bottom');
       if (topHandle) topHandle.style.display = 'none';
@@ -6340,21 +5686,11 @@ function attachResizeHandlers() {
     }
     
     const eventData = Array.isArray(events) ? events.find(ev => ev.id === id) : null;
-    // Also check shifts/meal arrays for read-only events
+    // Also check shifts array for shift events
     if (!eventData && Array.isArray(shifts)) {
       const shiftData = shifts.find(s => s.id === id);
       if (shiftData && (shiftData.isShift === true || (id && typeof id === 'string' && id.startsWith('shift_')))) {
         // This is a shift, skip resize handlers
-        const topHandle = item.querySelector('.resize-handle.top');
-        const bottomHandle = item.querySelector('.resize-handle.bottom');
-        if (topHandle) topHandle.style.display = 'none';
-        if (bottomHandle) bottomHandle.style.display = 'none';
-        return;
-      }
-    }
-    if (!eventData && Array.isArray(mealEvents)) {
-      const mealData = mealEvents.find(m => m.id === id);
-      if (mealData && (mealData.isMeal === true || (id && typeof id === 'string' && id.startsWith('meal_')))) {
         const topHandle = item.querySelector('.resize-handle.top');
         const bottomHandle = item.querySelector('.resize-handle.bottom');
         if (topHandle) topHandle.style.display = 'none';
