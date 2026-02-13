@@ -55,7 +55,13 @@ let googleSyncStartTime = null; // Sync start time (Date object)
 let googleSyncLastDuration = null; // Last sync duration (milliseconds)
 let googleSyncTooltipTimerId = null; // Tooltip real-time update timer ID
 const GOOGLE_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const GEMINI_API_KEY = 'AIzaSyA33_dooDd-YgE-14XfKrtFhGdW-yTYCXY';
 let crudStatus = 'idle'; // 'idle' | 'processing' | 'success' | 'error'
+
+// Global status state (unified indicator for AI + Google Sync)
+let isSyncingWithGoogle = false;
+let aiAnalyzingCount = 0;
+let lastOperationFailed = false;
 let crudStatusStartTime = null; // CRUD operation start time (Date object)
 let crudStatusLastDuration = null; // Last CRUD operation duration (milliseconds)
 let currentTimeIndicatorIntervalId = null; // Interval ID for updating current time indicator
@@ -223,49 +229,53 @@ function safeGetElementById(id) {
   return element;
 }
 
-// Update Google sync status indicator (unified with CRUD status)
+// Status tracking: isSyncingWithGoogle | aiAnalyzingCount | lastOperationFailed
+function setSyncingWithGoogle(value) {
+  isSyncingWithGoogle = !!value;
+  updateGlobalStatusIndicator();
+}
+
+function incrementAiAnalyzing() {
+  aiAnalyzingCount++;
+  lastOperationFailed = false;
+  updateGlobalStatusIndicator();
+}
+
+function decrementAiAnalyzing(failed) {
+  if (aiAnalyzingCount > 0) aiAnalyzingCount--;
+  if (failed) lastOperationFailed = true;
+  else lastOperationFailed = false;
+  updateGlobalStatusIndicator();
+}
+
+// Single unified status indicator: YELLOW (active) | GREEN (idle) | RED (failed)
+function updateGlobalStatusIndicator() {
+  const indicator = safeGetElementById('googleSyncIndicator');
+  if (!indicator) return;
+
+  indicator.classList.remove('status-processing', 'status-completed', 'status-failed', 'status-synced', 'status-syncing', 'status-error', 'status-unsynced', 'status-idle', 'status-success');
+
+  const hasActiveTasks = isSyncingWithGoogle || aiAnalyzingCount > 0 || crudStatus === 'processing';
+  const hasError = lastOperationFailed || crudStatus === 'error';
+
+  if (hasActiveTasks) {
+    indicator.classList.add('status-processing');
+  } else if (hasError) {
+    indicator.classList.add('status-failed');
+  } else {
+    indicator.classList.add('status-completed');
+  }
+}
+
+// Update Google sync status indicator (tracks time; actual UI now via updateGlobalStatusIndicator)
 function updateGoogleSyncIndicator(status) {
   googleSyncStatus = status;
-  
+
   if (status === 'syncing' && !googleSyncStartTime) {
     googleSyncStartTime = new Date();
   } else if (status !== 'syncing' && googleSyncStartTime) {
     googleSyncLastDuration = Date.now() - googleSyncStartTime.getTime();
     googleSyncStartTime = null;
-  }
-  
-  updateUnifiedStatusIndicator();
-}
-
-// Update unified status indicator (shows CRUD status when active, otherwise Google sync status)
-function updateUnifiedStatusIndicator() {
-  const indicator = safeGetElementById('googleSyncIndicator');
-  if (!indicator) return;
-  
-  // Remove all status classes
-  indicator.classList.remove('status-synced', 'status-syncing', 'status-error', 'status-unsynced', 'status-idle', 'status-processing', 'status-success');
-  
-  // If Google sync is actively syncing, show that (even if CRUD is processing/success)
-  // This ensures users see Google sync status when CRUD operations trigger Google sync
-  if (googleSyncStatus === 'syncing') {
-    indicator.classList.add('status-syncing');
-  } else if (crudStatus === 'processing') {
-    // Show CRUD processing when Google sync is not active
-    indicator.classList.add('status-processing');
-  } else if (crudStatus === 'success') {
-    // Show CRUD success briefly, but if Google sync is still syncing, that takes priority
-    indicator.classList.add('status-success');
-  } else if (crudStatus === 'error') {
-    indicator.classList.add('status-error');
-  } else {
-    // Show Google sync status when CRUD is idle
-    if (googleSyncStatus === 'synced') {
-      indicator.classList.add('status-synced');
-    } else if (googleSyncStatus === 'error') {
-      indicator.classList.add('status-error');
-    } else {
-      indicator.classList.add('status-unsynced');
-    }
   }
 }
 
@@ -375,7 +385,7 @@ function updateCrudStatusIndicator(status) {
   }
   
   // Update unified indicator
-  updateUnifiedStatusIndicator();
+  updateGlobalStatusIndicator();
   
   // Auto-return to idle after showing success/error
   if (status === 'success') {
@@ -1213,6 +1223,9 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
     return { created: 0, updated: 0, deleted: 0, skipped: 0 };
   }
 
+  setSyncingWithGoogle(true);
+  let mirrorFailed = false;
+  try {
   const payload = {
     action: 'mutations',
     source: 'schedule_mgr',
@@ -1229,11 +1242,13 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
       mode: 'cors',
     });
   } catch (error) {
+    mirrorFailed = true;
     showMessage('Failed to update Google Calendar. Please check your network.', 'error', 6000);
     throw error;
   }
 
   if (!response.ok) {
+    mirrorFailed = true;
     const errorText = await response.text().catch(() => '');
     const message = `Failed to update Google Calendar (${response.status}) ${errorText || ''}`.trim();
     showMessage(message, 'error', 6000);
@@ -1244,12 +1259,14 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
   try {
     result = await response.json();
   } catch (error) {
+    mirrorFailed = true;
     const message = 'Failed to parse Google Calendar response.';
     showMessage(message, 'error', 6000);
     throw error;
   }
 
   if (result?.success === false) {
+    mirrorFailed = true;
     const message = result?.message || 'Failed to update Google Calendar.';
     showMessage(message, 'error', 6000);
     throw new Error(message);
@@ -1264,6 +1281,11 @@ async function mirrorMutationsToGoogle({ upserts = [], deletes = [], silent = fa
     deleted: Number(result?.deleted) || 0,
     skipped: Number(result?.skipped) || 0,
   };
+  } finally {
+    setSyncingWithGoogle(false);
+    if (mirrorFailed) lastOperationFailed = true;
+    updateGlobalStatusIndicator();
+  }
 }
 
 async function syncEventsToGoogleCalendar({ silent = false } = {}) {
@@ -1280,56 +1302,40 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     if (!silent) showMessage(message, 'error', 6000);
     throw new Error(message);
   }
-  
-  // Set Google sync in progress flag (prevents re-rendering)
+
   isGoogleSyncing = true;
   updateGoogleSyncIndicator('syncing');
-  
-  // Safety mechanism: Automatically reset flag after 30 seconds (prevent freeze)
+  setSyncingWithGoogle(true);
+
   const syncTimeout = setTimeout(() => {
     if (isGoogleSyncing) {
       isGoogleSyncing = false;
       updateGoogleSyncIndicator('error');
+      setSyncingWithGoogle(false);
+      lastOperationFailed = true;
       updateViews({ useLoadingOverlay: false });
     }
   }, 30000);
-  
-  if (!silent) {
-    showLoading('Syncing with Google Calendar...');
-  }
 
   if (!Array.isArray(events) || events.length === 0) {
-    // No local events to sync — treat as a successful no-op and reset state
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('synced');
-    if (!silent) {
-      hideLoading();
-      showMessage('No events to sync.', 'info', 4000);
-    } else {
-      hideLoading();
-    }
-    // Ensure views are refreshed once to clear any loading state
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 100);
+    setSyncingWithGoogle(false);
+    lastOperationFailed = false;
+    if (!silent) showMessage('No events to sync.', 'info', 4000);
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 100);
     return { created: 0, updated: 0, skipped: 0 };
   }
 
   if (!Array.isArray(events)) {
-    // Event data not available — reset state and report error
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
-    if (!silent) {
-      hideLoading();
-      showMessage('Event data is not loaded.', 'error', 6000);
-    } else {
-      hideLoading();
-    }
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 100);
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    if (!silent) showMessage('Event data is not loaded.', 'error', 6000);
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 100);
     return { created: 0, updated: 0, skipped: 0 };
   }
 
@@ -1342,19 +1348,13 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
       isEventInAllowedRange(ev, rangeSet)
   );
   if (syncableEvents.length === 0) {
-    // No local events to sync — treat as successful and reset state
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('synced');
-    if (!silent) {
-      hideLoading();
-      showMessage('No local events to sync with Google.', 'info', 4000);
-    } else {
-      hideLoading();
-    }
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 100);
+    setSyncingWithGoogle(false);
+    lastOperationFailed = false;
+    if (!silent) showMessage('No local events to sync with Google.', 'info', 4000);
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 100);
     return { created: 0, updated: 0, skipped: 0 };
   }
 
@@ -1376,14 +1376,10 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
-    if (!silent) {
-      hideLoading();
-      showMessage('Failed to sync with Google Calendar. Please check your network.', 'error', 6000);
-    }
-      // Update UI even if error occurs (prevent freeze)
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 100);
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    if (!silent) showMessage('Failed to sync with Google Calendar. Please check your network.', 'error', 6000);
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 100);
     throw error;
   }
 
@@ -1391,16 +1387,12 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
     const errorText = await response.text().catch(() => '');
     const message = `Failed to call Google Apps Script (${response.status}) ${errorText || ''}`.trim();
-    if (!silent) {
-      hideLoading();
-      showMessage(message, 'error', 6000);
-    }
-      // Update UI even if error occurs (prevent freeze)
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 100);
+    if (!silent) showMessage(message, 'error', 6000);
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 100);
     throw new Error(message);
   }
 
@@ -1411,17 +1403,10 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
-    // Treat as success if response is not JSON
-    if (!silent) {
-      hideLoading();
-      showMessage('Synced with Google Calendar.', 'success', 5000);
-    } else {
-      hideLoading();
-    }
-    // After sync completes, reset flag with slight delay and update view once
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 1000);
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    if (!silent) showMessage('Synced with Google Calendar.', 'success', 5000);
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 1000);
     return { created: 0, updated: 0, skipped: 0 };
   }
 
@@ -1437,39 +1422,28 @@ async function syncEventsToGoogleCalendar({ silent = false } = {}) {
     // Clear timeout
     clearTimeout(syncTimeout);
     
-    // After sync completes, reset flag with slight delay and update view once
     setTimeout(() => {
       isGoogleSyncing = false;
-      // If error message is included, it's an error; otherwise success
+      setSyncingWithGoogle(false);
       if (message.includes('Error') || message.includes('Failed')) {
         updateGoogleSyncIndicator('error');
+        lastOperationFailed = true;
       } else {
         updateGoogleSyncIndicator('synced');
+        lastOperationFailed = false;
       }
-      // Update view once since changes may have occurred during sync
       updateViews({ useLoadingOverlay: false });
+      updateGlobalStatusIndicator();
     }, 1000);
 
-    if (!silent) {
-      hideLoading();
-      showMessage(`${message} (Created:${created} / Updated:${updated} / Skipped:${skipped})`, 'success', 6000);
-    } else {
-      // Always hide loading, even in silent mode
-      hideLoading();
-    }
-    
+    if (!silent) showMessage(`${message} (Created:${created} / Updated:${updated} / Skipped:${skipped})`, 'success', 6000);
     return { created, updated, skipped };
   } catch (error) {
-    // Always reset flag even if error occurs
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
-    if (!silent) {
-      hideLoading();
-    }
-      // Update UI even if error occurs (prevent freeze)
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 100);
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 100);
     throw error;
   }
 }
@@ -1482,20 +1456,16 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
   }
 
   const rangeSet = getAllowedDateRanges();
-  
-  if (!silent) {
-    showLoading('Fetching from Google Calendar...');
-  }
-
-  // Set Google sync in progress flag (prevents re-rendering)
   isGoogleSyncing = true;
   updateGoogleSyncIndicator('syncing');
-  
-  // Safety mechanism: Automatically reset flag after 30 seconds (prevent freeze)
+  setSyncingWithGoogle(true);
+
   const syncTimeout = setTimeout(() => {
     if (isGoogleSyncing) {
       isGoogleSyncing = false;
       updateGoogleSyncIndicator('error');
+      setSyncingWithGoogle(false);
+    lastOperationFailed = true;
       updateViews({ useLoadingOverlay: false });
     }
   }, 30000);
@@ -1508,10 +1478,9 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
-    if (!silent) {
-      hideLoading();
-      showMessage('Failed to fetch from Google Calendar. Please check your network.', 'error', 6000);
-    }
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    if (!silent) showMessage('Failed to fetch from Google Calendar. Please check your network.', 'error', 6000);
     throw error;
   }
 
@@ -1519,12 +1488,11 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
     const errorText = await response.text().catch(() => '');
     const message = `Failed to fetch from Google Calendar (${response.status}) ${errorText || ''}`.trim();
-    if (!silent) {
-      hideLoading();
-      showMessage(message, 'error', 6000);
-    }
+    if (!silent) showMessage(message, 'error', 6000);
     throw new Error(message);
   }
 
@@ -1535,11 +1503,9 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
-    const message = 'Google Calendar response is invalid.';
-    if (!silent) {
-      hideLoading();
-      showMessage(message, 'error', 6000);
-    }
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    if (!silent) showMessage('Google Calendar response is invalid.', 'error', 6000);
     throw error;
   }
 
@@ -1550,42 +1516,27 @@ async function fetchGoogleCalendarEvents({ silent = false } = {}) {
     // Clear timeout
     clearTimeout(syncTimeout);
     
-    // Reset flag immediately (syncEventsToGoogleCalendar will set it again if needed)
     isGoogleSyncing = false;
-    
-    if (!silent) {
-      hideLoading();
-      showMessage(
-        `Fetched from Google Calendar: ${googleEvents.length} events (New:${created} / Updated:${updated} / Duplicates removed:${deleted})`,
-        'success',
-        6000
-      );
-    } else {
-      // Always hide loading, even in silent mode
-      hideLoading();
-    }
-    
-    // Update view once since changes may have occurred during sync
+    setSyncingWithGoogle(false);
+    lastOperationFailed = false;
+    if (!silent) showMessage(
+      `Fetched from Google Calendar: ${googleEvents.length} events (New:${created} / Updated:${updated} / Duplicates removed:${deleted})`,
+      'success',
+      6000
+    );
     setTimeout(() => {
       updateViews({ useLoadingOverlay: false });
     }, 100);
     
     return { created, updated, deleted: deleted || 0, total: googleEvents.length };
   } catch (error) {
-    // Always reset flag even if error occurs
     clearTimeout(syncTimeout);
     isGoogleSyncing = false;
     updateGoogleSyncIndicator('error');
-    if (!silent) {
-      hideLoading();
-      showMessage('Failed to merge Google Calendar events.', 'error', 6000);
-    } else {
-      hideLoading();
-    }
-    // Update UI even if error occurs (prevent freeze)
-    setTimeout(() => {
-      updateViews({ useLoadingOverlay: false });
-    }, 100);
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    if (!silent) showMessage('Failed to merge Google Calendar events.', 'error', 6000);
+    setTimeout(() => updateViews({ useLoadingOverlay: false }), 100);
     throw error;
   }
 }
@@ -1888,7 +1839,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
             source: 'google',
             isGoogleImported: true,
           },
-          { syncGoogle: false }
+          { syncGoogle: false, skipAi: true }
         );
         updated += 1;
       }
@@ -1918,7 +1869,7 @@ async function mergeGoogleEvents(googleEvents = [], ranges) {
           ...normalized,
           source: existing.source || 'google',
           isGoogleImported: true,
-        }, { syncGoogle: false });
+        }, { syncGoogle: false, skipAi: true });
         updated += 1;
       }
       continue;
@@ -2022,12 +1973,159 @@ function normalizeForCompare(value, key) {
   return value;
 }
 
-// Add event
+// RPG Stats: fallback when AI is unavailable (color-based static mapping)
+// Category mapping: Tasks(Blue)=int, Events(Green)=chr, Routines(Yellow)=spi, Exercise(Red)=vit,
+//                  Play(Purple)=chr+spi, Rest(Pink)=vit+spi
+function calculateStatsFromColor(color) {
+  const stats = { int: 0, vit: 0, chr: 0, spi: 0 };
+  const c = (color || '').trim().toLowerCase();
+  if (c === '#3b82f6') { stats.int = 10; }                    // Tasks -> Intellect
+  else if (c === '#10b981') { stats.chr = 10; }               // Events -> Charisma
+  else if (c === '#f59e0b') { stats.spi = 10; }               // Routines -> Spirit
+  else if (c === '#ef4444') { stats.vit = 10; }               // Exercise -> Vitality
+  else if (c === '#8b5cf6') { stats.chr = 5; stats.spi = 5; }  // Play -> Charisma & Spirit
+  else if (c === '#ec4899') { stats.vit = 5; stats.spi = 5; } // Rest -> Vitality & Spirit
+  else { stats.int = 2; stats.vit = 2; stats.chr = 2; stats.spi = 2; } // Balanced growth
+  return stats;
+}
+
+// Map color hex to category name for AI prompt
+function getCategoryFromColor(color) {
+  const c = (color || '').trim().toLowerCase();
+  if (c === '#3b82f6') return 'Tasks';
+  if (c === '#10b981') return 'Events';
+  if (c === '#f59e0b') return 'Routines';
+  if (c === '#ef4444') return 'Exercise';
+  if (c === '#8b5cf6') return 'Play';
+  if (c === '#ec4899') return 'Rest';
+  return 'Other';
+}
+
+// AI request queue: process one at a time to avoid 429 rate limits
+let aiQueue = [];
+let aiQueueRunning = false;
+async function runAiQueue() {
+  if (aiQueueRunning || aiQueue.length === 0) return;
+  aiQueueRunning = true;
+  while (aiQueue.length > 0) {
+    const { resolve, reject, fn } = aiQueue.shift();
+    try {
+      const result = await fn();
+      resolve(result);
+    } catch (err) {
+      reject(err);
+    }
+  }
+  aiQueueRunning = false;
+}
+function getAiStatsQueued(title, color, existingEvent) {
+  return new Promise((resolve, reject) => {
+    aiQueue.push({
+      resolve, reject,
+      fn: () => getAiStats(title, color, existingEvent)
+    });
+    runAiQueue();
+  });
+}
+
+// AI Stats Flow (Life RPG Game Master):
+// 1. User clicks "Save" -> form submits
+// 2. App sends event title + category to Gemini API
+// 3. Gemini evaluates "effort" and "nature" of the task (e.g. "Deep Work 3h" vs "Quick check")
+// 4. Gemini returns JSON: { int, vit, chr, spi, reason }
+// 5. App merges stats into the event and saves to Firebase
+async function getAiStats(title, color, existingEvent = null) {
+  const category = getCategoryFromColor(color);
+  const fallback = () => calculateStatsFromColor(color);
+
+  // Redundancy: skip AI if event already has stats and title unchanged (saves API quota)
+  if (existingEvent?.stats && existingEvent?.title === title) {
+    const s = existingEvent.stats;
+    if (s && typeof s.int === 'number' && typeof s.vit === 'number' && typeof s.chr === 'number' && typeof s.spi === 'number') {
+      return { int: s.int, vit: s.vit, chr: s.chr, spi: s.spi };
+    }
+  }
+
+  if (!GEMINI_API_KEY || GEMINI_API_KEY === 'ここにあなたのAPIキーを貼り付け') {
+    return fallback();
+  }
+
+  const prompt = `Act as a Life RPG Game Master. Based on the event title '${title}' and its category '${category}', evaluate the RPG experience points (stats).
+Return only a JSON object: { "int": number, "vit": number, "chr": number, "spi": number, "reason": string }.
+Rules:
+- Total points should be around 10-20.
+- Evaluate the effort/importance based on context (e.g., 'Deep Work for 3 hours' is higher Int than 'Quick check').
+- 'int' for intellectual tasks, 'vit' for physical/health, 'chr' for social/events, 'spi' for routines/discipline.
+- The 'reason' should be a short one-liner in Japanese explaining the evaluation.`;
+
+  const maxRetries = 3;
+  let lastError = null;
+
+  try {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 1) {
+          const delayMs = Math.min(16000, 4000 * Math.pow(2, attempt - 2));
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+
+        const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + GEMINI_API_KEY;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }]
+          })
+        });
+
+        if (res.status === 429 && attempt < maxRetries) {
+          lastError = new Error('Rate limit (429)');
+          continue;
+        }
+
+        if (!res.ok) {
+          throw new Error('API error ' + res.status);
+        }
+
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text || typeof text !== 'string') {
+          throw new Error('Invalid response');
+        }
+
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        const raw = jsonMatch ? jsonMatch[0] : text;
+        const parsed = JSON.parse(raw);
+
+        const int = Math.max(0, Math.min(20, Number(parsed.int) || 0));
+        const vit = Math.max(0, Math.min(20, Number(parsed.vit) || 0));
+        const chr = Math.max(0, Math.min(20, Number(parsed.chr) || 0));
+        const spi = Math.max(0, Math.min(20, Number(parsed.spi) || 0));
+
+        return { int, vit, chr, spi };
+      } catch (err) {
+        lastError = err;
+        if (err?.message?.includes('429') || (err?.message?.includes('Rate limit') && attempt < maxRetries)) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError || new Error('Max retries exceeded');
+  } catch (err) {
+    console.warn('getAiStats fallback:', err?.message || err);
+    return fallback();
+  }
+}
+
+// Add event (saves immediately with fallback stats; AI analysis runs in background)
 async function addEvent(event, options = {}) {
   const { syncGoogle = true } = options;
 
   const normalizedStart = normalizeEventDateTimeString(event.startTime);
   const normalizedEnd = normalizeEventDateTimeString(event.endTime);
+  const initialStats = calculateStatsFromColor(event.color);
+  incrementAiAnalyzing();
 
   const baseEvent = {
     ...event,
@@ -2039,25 +2137,21 @@ async function addEvent(event, options = {}) {
     isGoogleImported: event.isGoogleImported === true,
     externalUpdatedAt: event.externalUpdatedAt || null,
     isTimetable: event.isTimetable === true,
+    stats: initialStats,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     lastWriteClientId: clientId,
   };
 
-  // When Firebase is disabled, operate purely on local state
   if (!isFirebaseEnabled || !window.firebase?.db) {
-    if (!Array.isArray(events)) {
-      events = [];
-    }
+    if (!Array.isArray(events)) events = [];
     const id = generateId();
-    const newEvent = { ...baseEvent, id };
-    events.push(newEvent);
+    events.push({ ...baseEvent, id });
     updateViews();
     scheduleAllNotifications();
     return id;
   }
 
-  // Normal path: write to Firebase and rely on realtime listeners to update `events`
   try {
     const eventsRef = window.firebase.ref(window.firebase.db, 'events');
     const newEventRef = window.firebase.push(eventsRef);
@@ -2067,36 +2161,47 @@ async function addEvent(event, options = {}) {
 
     if (syncGoogle && newId && baseEvent.isTimetable !== true) {
       try {
-        // Update Google sync indicator to show syncing
         updateGoogleSyncIndicator('syncing');
-        await mirrorMutationsToGoogle({
-          upserts: [{ ...baseEvent, id: newId }],
-          silent: true,
-        });
-        // Update Google sync indicator to show synced
+        await mirrorMutationsToGoogle({ upserts: [{ ...baseEvent, id: newId }], silent: true });
         updateGoogleSyncIndicator('synced');
-      } catch (error) {
-        // If Google sync fails, mark as error
+      } catch (err) {
         updateGoogleSyncIndicator('error');
       }
     }
 
+    // AI analysis in background (non-blocking)
+    getAiStatsQueued(event.title || '', event.color, null).then((aiStats) => {
+      return updateEvent(newId, { stats: aiStats }, { syncGoogle: false, skipAi: true });
+    }).then((ok) => {
+      decrementAiAnalyzing(!ok);
+    }).catch(() => {
+      setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    });
+
     return newId;
   } catch (error) {
+    setSyncingWithGoogle(false);
+    lastOperationFailed = true;
     showMessage('Could not save event. Please check your network and Firebase settings.', 'error', 6000);
     return null;
   }
 }
 
-// Update event
+// Update event (skipAi: true = use event.stats; false = save first, AI in background)
 async function updateEvent(id, event, options = {}) {
-  const { syncGoogle = true } = options;
+  const { syncGoogle = true, skipAi = false } = options;
 
   const existingEvent = (Array.isArray(events) ? events.find(e => e.id === id) : null) || {};
   const startSource = event.startTime ?? existingEvent.startTime ?? '';
   const endSource = event.endTime ?? existingEvent.endTime ?? '';
   const normalizedStart = normalizeEventDateTimeString(startSource);
   const normalizedEnd = normalizeEventDateTimeString(endSource);
+
+  const colorForStats = event.color ?? existingEvent.color;
+  const titleForStats = event.title ?? existingEvent.title ?? '';
+  const stats = (skipAi && event.stats) ? event.stats : calculateStatsFromColor(colorForStats);
+  if (!skipAi) incrementAiAnalyzing();
 
   const updatedEvent = {
     ...existingEvent,
@@ -2112,6 +2217,7 @@ async function updateEvent(id, event, options = {}) {
         ? true
         : existingEvent.isGoogleImported === true,
     externalUpdatedAt: event.externalUpdatedAt || existingEvent.externalUpdatedAt || null,
+    stats,
     updatedAt: new Date().toISOString(),
     lastWriteClientId: clientId,
   };
@@ -2129,32 +2235,72 @@ async function updateEvent(id, event, options = {}) {
     return true;
   }
 
-  // Normal path: update Firebase; local state comes from realtime listener
   const eventRef = window.firebase.ref(window.firebase.db, `events/${id}`);
   try {
     await window.firebase.update(eventRef, updatedEvent);
   } catch (error) {
+    if (!skipAi) decrementAiAnalyzing(true);
     showMessage('Failed to update event. Please check your network connection.', 'error', 6000);
     return false;
   }
 
   if (syncGoogle && updatedEvent.isTimetable !== true) {
     try {
-      // Update Google sync indicator to show syncing
       updateGoogleSyncIndicator('syncing');
-      await mirrorMutationsToGoogle({
-        upserts: [{ ...updatedEvent, id }],
-        silent: true,
-      });
-      // Update Google sync indicator to show synced
+      await mirrorMutationsToGoogle({ upserts: [{ ...updatedEvent, id }], silent: true });
       updateGoogleSyncIndicator('synced');
-    } catch (error) {
-      // If Google sync fails, mark as error
+    } catch (err) {
       updateGoogleSyncIndicator('error');
     }
   }
 
+  // AI analysis in background when not skipAi (user-initiated edit)
+  if (!skipAi) {
+    getAiStatsQueued(titleForStats, colorForStats, updatedEvent).then((aiStats) => {
+      return updateEvent(id, { stats: aiStats }, { syncGoogle: false, skipAi: true });
+    }).then((ok) => {
+      decrementAiAnalyzing(!ok);
+    }).catch(() => {
+      setSyncingWithGoogle(false);
+    lastOperationFailed = true;
+    });
+  }
+
   return true;
+}
+
+// Migration: add stats to events that don't have them (run once, then remove or keep for future use)
+async function migrateOldEvents() {
+  if (!window.firebase?.db || !window.firebase.get || !window.firebase.update || !window.firebase.ref) {
+    alert('Firebase is not available. Cannot migrate.');
+    return;
+  }
+  try {
+    const snapshot = await window.firebase.get(window.firebase.ref(window.firebase.db, 'events'));
+    const data = snapshot.val();
+    if (!data || typeof data !== 'object') {
+      alert('No events to migrate.');
+      return;
+    }
+    const updates = {};
+    let count = 0;
+    for (const [id, event] of Object.entries(data)) {
+      if (event && typeof event === 'object' && !Object.prototype.hasOwnProperty.call(event, 'stats')) {
+        const color = event.color || '';
+        updates[`events/${id}/stats`] = calculateStatsFromColor(color);
+        count++;
+      }
+    }
+    if (count === 0) {
+      alert('All events already have stats. No migration needed.');
+      return;
+    }
+    await window.firebase.update(window.firebase.ref(window.firebase.db), updates);
+    alert(`Migration complete. Updated ${count} record(s).`);
+  } catch (err) {
+    console.error('migrateOldEvents error:', err);
+    alert('Migration failed: ' + (err.message || String(err)));
+  }
 }
 
 // Delete event
@@ -2510,8 +2656,8 @@ function startAutomaticGoogleSync() {
     }
   };
 
-  // Execute initial sync immediately
-  syncTask('initial-delay');
+  // Delay initial sync so user sees GREEN "Ready" state first
+  setTimeout(() => syncTask('initial-delay'), 1500);
   // Set up periodic sync
   googleSyncIntervalId = setInterval(() => syncTask('interval'), GOOGLE_SYNC_INTERVAL_MS);
 }
@@ -2596,6 +2742,16 @@ function getEventsByDate(date) {
   }
   
   return list;
+}
+
+// Get editable events for "Use Existing Event" in the add-event form (all events, excludes shifts/timetable).
+function getRecentEditableEvents(limit = 100) {
+  if (!Array.isArray(events)) return [];
+  return events
+    .filter(e => e && e.id && typeof e.id === 'string' && !e.id.startsWith('shift_') && !e.id.startsWith('timetable_') && !e.isTimetable)
+    .filter(e => e.startTime)
+    .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())
+    .slice(0, limit);
 }
 
 // Get events for specific week (including events that span weeks)
@@ -3096,6 +3252,76 @@ function positionEventInDayView(element, event, targetDate = null) {
   }
 }
 
+// Fill the add-event form from an existing event: title/description + date on current day; keep session settings (color, recurrence, reminder, etc.).
+function applyExistingEventToForm(ev) {
+  if (!ev) return;
+  const titleInput = safeGetElementById('eventTitle');
+  const descInput = safeGetElementById('eventDescription');
+  const startDateInput = safeGetElementById('eventStartDate');
+  const startHourInput = safeGetElementById('eventStartHour');
+  const startMinuteInput = safeGetElementById('eventStartMinute');
+  const endDateInput = safeGetElementById('eventEndDate');
+  const endHourInput = safeGetElementById('eventEndHour');
+  const endMinuteInput = safeGetElementById('eventEndMinute');
+  const allDayCheckbox = safeGetElementById('eventAllDay');
+  const allDayStartInput = safeGetElementById('eventAllDayStart');
+  const allDayEndInput = safeGetElementById('eventAllDayEnd');
+  const allDayControls = {
+    startInput: startDateInput,
+    endInput: endDateInput,
+    allDayRow: safeGetElementById('allDayDateRow'),
+    startHourInput,
+    startMinuteInput,
+    endHourInput,
+    endMinuteInput
+  };
+  // Inherit only title and description from existing event
+  if (titleInput) titleInput.value = ev.title || '';
+  if (descInput) descInput.value = ev.description || '';
+  // Target date = the day the user is currently viewing (currentDate)
+  const targetDate = (currentDate instanceof Date && !Number.isNaN(currentDate.getTime())) ? new Date(currentDate) : new Date();
+  targetDate.setHours(0, 0, 0, 0);
+  const dateStr = formatDateOnly(targetDate.toISOString());
+  const allDay = isAllDayEvent(ev);
+  if (allDay) {
+    if (allDayCheckbox) allDayCheckbox.checked = true;
+    if (startDateInput) startDateInput.value = dateStr;
+    if (endDateInput) endDateInput.value = dateStr;
+    if (allDayStartInput) allDayStartInput.value = dateStr;
+    if (allDayEndInput) allDayEndInput.value = dateStr;
+    applyAllDayMode(true, allDayControls);
+  } else {
+    if (allDayCheckbox) allDayCheckbox.checked = false;
+    const start = ev.startTime ? new Date(ev.startTime) : new Date();
+    const end = ev.endTime ? new Date(ev.endTime) : new Date(start.getTime() + 60 * 60 * 1000);
+    if (startDateInput) startDateInput.value = dateStr;
+    if (endDateInput) endDateInput.value = dateStr;
+    if (startHourInput) startHourInput.value = start.getHours();
+    if (startMinuteInput) startMinuteInput.value = Math.round(start.getMinutes() / 15) * 15;
+    if (endHourInput) endHourInput.value = end.getHours();
+    if (endMinuteInput) endMinuteInput.value = Math.round(end.getMinutes() / 15) * 15;
+    applyAllDayMode(false, allDayControls);
+  }
+  // Carry over color from the selected existing event; fall back to default if event color is missing or not in the form options
+  const colorRadios = document.querySelectorAll('input[name="color"]');
+  const eventColor = (ev.color || '').trim();
+  const defaultColor = '#3b82f6';
+  let matched = false;
+  colorRadios.forEach(radio => {
+    if (radio.value === eventColor) {
+      radio.checked = true;
+      matched = true;
+    } else {
+      radio.checked = false;
+    }
+  });
+  if (!matched && colorRadios.length) {
+    colorRadios.forEach(radio => {
+      radio.checked = radio.value === defaultColor;
+    });
+  }
+}
+
 // Show modal
 function showEventModal(eventId = null) {
   // Prevent editing of shifts
@@ -3181,6 +3407,9 @@ function showEventModal(eventId = null) {
     if (deleteBtn) deleteBtn.style.display = 'block';
     if (saveBtn) saveBtn.textContent = 'Save';
     
+    const pastEventSection = safeGetElementById('pastEventSection');
+    if (pastEventSection) pastEventSection.classList.add('hidden');
+    
     // Check if this event is part of a recurring series
     const recurringSeriesId = event.recurringSeriesId;
     const seriesEvents = recurringSeriesId ? findRecurringSeriesEvents(recurringSeriesId) : [];
@@ -3251,6 +3480,36 @@ function showEventModal(eventId = null) {
     if (modalTitle) modalTitle.textContent = 'New Event';
     if (deleteBtn) deleteBtn.style.display = 'none';
     if (saveBtn) saveBtn.textContent = 'Create';
+    
+    const pastEventSection = safeGetElementById('pastEventSection');
+    const pastEventList = safeGetElementById('pastEventList');
+    if (pastEventSection) pastEventSection.classList.remove('hidden');
+    if (pastEventList) {
+      const recent = getRecentEditableEvents(50);
+      const seenTitles = new Set();
+      const uniqueByTitle = recent.filter(ev => {
+        const t = (ev.title || '').trim() || 'Untitled';
+        if (seenTitles.has(t)) return false;
+        seenTitles.add(t);
+        return true;
+      });
+      pastEventList.innerHTML = '';
+      if (uniqueByTitle.length === 0) {
+        pastEventList.innerHTML = '<p class="past-event-empty">No past events to reuse.</p>';
+      } else {
+        uniqueByTitle.forEach(ev => {
+          const label = escapeHtml(ev.title || 'Untitled');
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'past-event-item past-event-item-compact';
+          item.setAttribute('role', 'option');
+          item.dataset.eventId = ev.id;
+          item.innerHTML = `<span class="past-event-title">${label}</span>`;
+          item.addEventListener('click', () => applyExistingEventToForm(ev));
+          pastEventList.appendChild(item);
+        });
+      }
+    }
     
     // Default reminder: 30 minutes before
     const reminderSelect = safeGetElementById('eventReminder');
@@ -4453,8 +4712,11 @@ document.addEventListener('DOMContentLoaded', function() {
     return;
   }
   
-  // Initialize Google sync status indicator (start in unsynced state)
   updateGoogleSyncIndicator('unsynced');
+  isSyncingWithGoogle = false;
+  aiAnalyzingCount = 0;
+  lastOperationFailed = false;
+  updateGlobalStatusIndicator();
   
   // Add hover/click events to indicator (prevent duplicate registration)
   const indicator = safeGetElementById('googleSyncIndicator');

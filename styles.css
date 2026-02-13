@@ -167,7 +167,6 @@ body {
   font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-base);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
 }
@@ -266,10 +265,23 @@ body {
 
 /* Unified status indicator now uses google-sync-indicator classes */
 /* CRUD status classes are applied to google-sync-indicator when active */
-.google-sync-indicator.status-processing {
-  background-color: #eab308; /* Yellow - CRUD processing */
+/* Unified status: processing | completed | failed */
+.google-sync-indicator.status-processing,
+.status-processing {
+  background-color: #facc15;
   animation: statusPulse 1.5s ease-in-out infinite;
-  color: #eab308; /* Set color for the rotating dot */
+}
+.google-sync-indicator.status-completed,
+.status-completed {
+  background-color: #22c55e;
+}
+.google-sync-indicator.status-failed,
+.status-failed {
+  background-color: #ef4444;
+}
+
+.google-sync-indicator.status-processing {
+  color: #facc15;
 }
 
 .google-sync-indicator.status-success {
@@ -1240,7 +1252,6 @@ body.modal-open {
   font-size: 22px;
   cursor: pointer;
   color: var(--text-secondary);
-  transition: all var(--transition-base);
   padding: 0;
   width: 32px;
   height: 32px;
@@ -1292,6 +1303,69 @@ body.modal-open {
 .form-section.options-section {
   background: rgba(248, 250, 252, 0.6);
   border-color: var(--border-light);
+}
+
+/* High-density chip layout: horizontal flow with wrap */
+.past-event-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  align-content: flex-start;
+}
+
+.past-event-empty {
+  margin: 0;
+  padding: 0.25rem 0;
+  color: var(--text-muted, #64748b);
+  font-size: 0.8125rem;
+}
+
+.past-event-item {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  text-align: left;
+  width: auto;
+  max-width: 100%;
+  padding: 0.22rem 0.45rem;
+  border: 1px solid var(--border-light, rgba(0, 0, 0, 0.1));
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.past-event-item-compact .past-event-title {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.past-event-item:hover,
+.past-event-item:focus-visible {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
+  outline: none;
+}
+
+.past-event-item:active {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.past-event-item .past-event-title {
+  font-weight: 500;
+  color: var(--text-primary, #1e293b);
+}
+
+.past-event-item .past-event-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted, #64748b);
+  margin-top: 0.125rem;
 }
 
 .form-group {
@@ -2153,30 +2227,9 @@ body.modal-open {
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all var(--transition-base);
-  position: relative;
-  overflow: hidden;
   letter-spacing: 0.2px;
   min-width: clamp(3.5rem, 9vw, 4.5rem);
   box-shadow: var(--shadow-sm);
-}
-
-.btn::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.3);
-  transition: width 0.5s ease, height 0.5s ease;
-  pointer-events: none;
-}
-
-.btn:hover::before {
-  width: 400px;
-  height: 400px;
 }
 
 .btn:focus {
